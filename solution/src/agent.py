@@ -16,7 +16,7 @@ DESIGN NOTES:
 
 import os
 from typing import Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
@@ -31,6 +31,14 @@ from prompts import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class ChatMessage:
+    """Represents a single message in chat history."""
+
+    user_question: str
+    final_answer: str
 
 
 @dataclass
@@ -57,8 +65,9 @@ class VulnerabilityAgent:
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        max_iterations: Optional[int] = 6,
-        max_retries: Optional[int] = 2,
+        max_iterations: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        max_chat_history: Optional[int] = None,
         typesense_host: str = "localhost",
         typesense_port: str = "8108",
         typesense_api_key: str = "xyz",
@@ -68,8 +77,9 @@ class VulnerabilityAgent:
         Args:
             api_key: Google API key (defaults to GOOGLE_API_KEY env var)
             model: Gemini model (defaults to GEMINI_MODEL env var)
-            max_iterations: Max ReAct iterations (defaults to MAX_REACT_ITERATIONS env var, fallback 5)
+            max_iterations: Max ReAct iterations (defaults to MAX_REACT_ITERATIONS env var, fallback 6)
             max_retries: Max retries on API errors (defaults to MAX_RETRIES env var, fallback 2)
+            max_chat_history: Max chat history messages to keep (defaults to MAX_CHAT_HISTORY env var, fallback 3)
             typesense_host: Typesense server host
             typesense_port: Typesense server port
             typesense_api_key: Typesense API key
@@ -79,15 +89,18 @@ class VulnerabilityAgent:
             raise ValueError("GOOGLE_API_KEY environment variable not set")
 
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
-        self.max_iterations = max_iterations or int(os.getenv("MAX_REACT_ITERATIONS", "6"))
-        self.max_retries = max_retries or int(os.getenv("MAX_RETRIES", "2"))
+        self.max_iterations = max_iterations if max_iterations is not None else int(os.getenv("MAX_REACT_ITERATIONS", "6"))
+        self.max_retries = max_retries if max_retries is not None else int(os.getenv("MAX_RETRIES", "2"))
+        self.max_chat_history = max_chat_history if max_chat_history is not None else int(os.getenv("MAX_CHAT_HISTORY", "3"))
+        self.chat_history: List[ChatMessage] = []
 
         self.client = genai.Client(api_key=self.api_key)
         self.search_tool = VulnerabilitySearchTool(
             typesense_host, typesense_port, typesense_api_key
         )
         logger.info(
-            f"Initialized agent: model={self.model}, max_iterations={self.max_iterations}, max_retries={self.max_retries}"
+            f"Initialized agent: model={self.model}, max_iterations={self.max_iterations}, "
+            f"max_retries={self.max_retries}, max_chat_history={self.max_chat_history}"
         )
 
     def answer_question(self, user_question: str) -> str:
@@ -119,9 +132,9 @@ class VulnerabilityAgent:
         # This avoids re-encoding the same question in each semantic/hybrid search
         state.question_embedding = self.search_tool.embedding_model.encode(user_question).tolist()
 
-        # Get tool and system instruction
+        # Get tool and system instruction with chat history
         tool = types.Tool(function_declarations=[get_search_tool_declaration()])
-        system_instruction = get_system_instruction()
+        system_instruction = get_system_instruction(chat_history=self.chat_history)
 
         # Main ReAct loop
         while state.iteration < self.max_iterations:
@@ -175,6 +188,18 @@ class VulnerabilityAgent:
                 state.final_answer = "Sorry, we could not generate an answer. Please try a different question or refine your query."
 
         result = state.final_answer or "Could not generate answer."
+        
+        # Add to chat history and maintain max size
+        self.chat_history.append(ChatMessage(
+            user_question=user_question,
+            final_answer=result
+        ))
+        
+        # Keep only the last max_chat_history messages
+        if len(self.chat_history) > self.max_chat_history:
+            self.chat_history = self.chat_history[-self.max_chat_history:]
+        
+        logger.info(f"Chat history size: {len(self.chat_history)}/{self.max_chat_history}")
         logger.info(f"\n✅ Final answer ({len(result)} chars)")
         logger.info("=" * 80 + "\n")
         return result

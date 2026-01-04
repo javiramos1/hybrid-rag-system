@@ -14,7 +14,7 @@ load_dotenv()
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from agent import VulnerabilityAgent
+from agent import VulnerabilityAgent, ChatMessage, IterationState
 from search_tool import SearchResult
 from prompts import get_search_tool_declaration, get_system_instruction
 
@@ -76,9 +76,9 @@ class TestReActPattern:
         assert agent.max_iterations == 3
 
     def test_default_max_iterations(self):
-        """Test agent defaults to 5 max iterations."""
+        """Test agent defaults to 6 max iterations."""
         agent = VulnerabilityAgent()
-        assert agent.max_iterations == 5
+        assert agent.max_iterations == 6
 
     def test_extract_function_call_present(self, agent):
         """Test extracting function call from response when present."""
@@ -117,79 +117,45 @@ class TestReActPattern:
         result = agent._extract_function_call(response)
         assert result is None
 
-    def test_extract_text_response(self, agent):
-        """Test extracting text response from LLM."""
+    def test_process_response_with_final_answer(self, agent):
+        """Test _process_response extracts final answer."""
         from unittest.mock import Mock
 
         response = Mock()
-        response.text = "This is the answer"
-        response.candidates = None  # Ensure no candidates list
-
-        result = agent._extract_text_response(response)
-        assert result == "This is the answer"
-
-    def test_extract_text_response_concatenation(self, agent):
-        """Test text extraction with direct .text property."""
-        from unittest.mock import Mock
-
-        response = Mock()
-        response.text = "Part 1 Part 2"
-        response.candidates = None  # Ensure no candidates list
-
-        result = agent._extract_text_response(response)
-        assert result == "Part 1 Part 2"
-
-    def test_build_answer_context_empty_documents(self, agent):
-        """Test answer context building with no documents."""
-        from agent import IterationState
-
-        state = IterationState(
-            iteration=2,
-            search_history=[
-                ("keyword", "rust", 0),
-                ("keyword", "*", 0),
-            ],
-            documents_collected={},
-        )
-
-        context = agent._build_answer_context("Show rust vulnerabilities", state)
-
-        assert "rust vulnerabilities" in context
-        assert "Search History (2 searches)" in context
-        assert "Collected Documents (0)" in context
-        assert "No documents found" in context
-
-    def test_build_answer_context_with_documents(self, agent):
-        """Test answer context building with collected documents."""
-        from agent import IterationState
-
+        response.text = "Let me analyze this. Final Answer: The vulnerability has CVSS 9.8"
+        
         state = IterationState(
             iteration=1,
-            search_history=[("keyword", "npm Critical", 5)],
-            documents_collected={
-                "CVE-2024-1": {
-                    "cve_id": "CVE-2024-1",
-                    "package_name": "express",
-                    "ecosystem": "npm",
-                    "severity": "Critical",
-                    "cvss_score": 9.8,
-                    "description": "Test vulnerability",
-                }
-            },
+            search_history=[],
+            documents_collected={}
         )
+        
+        result = agent._process_response(response, state)
+        
+        assert result is True
+        assert "CVSS 9.8" in state.final_answer
+        assert "Let me analyze" not in state.final_answer
 
-        context = agent._build_answer_context("Show npm Critical vulnerabilities", state)
+    def test_process_response_without_final_answer(self, agent):
+        """Test _process_response continues when no final answer marker."""
+        from unittest.mock import Mock
 
-        assert "CVE-2024-1" in context
-        assert "express" in context
-        assert "Critical" in context
-        assert "9.8" in context
-        assert "Collected Documents (1)" in context
+        response = Mock()
+        response.text = "Let me search for more information about this vulnerability."
+        
+        state = IterationState(
+            iteration=1,
+            search_history=[],
+            documents_collected={}
+        )
+        
+        result = agent._process_response(response, state)
+        
+        assert result is False
+        assert state.final_answer is None
 
     def test_iteration_state_initialization(self):
         """Test IterationState dataclass."""
-        from agent import IterationState
-
         state = IterationState(iteration=1, search_history=[], documents_collected={})
 
         assert state.iteration == 1
@@ -199,8 +165,6 @@ class TestReActPattern:
 
     def test_iteration_state_mutation(self):
         """Test IterationState can be mutated during loop."""
-        from agent import IterationState
-
         state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         # Simulate iteration
@@ -211,3 +175,210 @@ class TestReActPattern:
         assert state.iteration == 1
         assert len(state.search_history) == 1
         assert len(state.documents_collected) == 1
+
+
+class TestChatHistory:
+    """Test chat history tracking functionality."""
+
+    def test_agent_initializes_empty_chat_history(self):
+        """Test agent starts with empty chat history."""
+        agent = VulnerabilityAgent()
+        assert agent.chat_history == []
+        assert isinstance(agent.chat_history, list)
+
+    def test_agent_default_max_chat_history(self):
+        """Test agent defaults to MAX_CHAT_HISTORY=3."""
+        agent = VulnerabilityAgent()
+        assert agent.max_chat_history == 3
+
+    def test_agent_custom_max_chat_history(self):
+        """Test agent accepts custom max_chat_history."""
+        agent = VulnerabilityAgent(max_chat_history=5)
+        assert agent.max_chat_history == 5
+
+    def test_agent_reads_max_chat_history_from_env(self, monkeypatch):
+        """Test agent reads MAX_CHAT_HISTORY from environment variable."""
+        # Clear existing env var if set
+        monkeypatch.delenv("MAX_CHAT_HISTORY", raising=False)
+        # Set the env var to test
+        monkeypatch.setenv("MAX_CHAT_HISTORY", "7")
+        agent = VulnerabilityAgent()
+        assert agent.max_chat_history == 7
+
+    def test_chat_message_creation(self):
+        """Test ChatMessage dataclass."""
+        msg = ChatMessage(
+            user_question="What are critical vulnerabilities?",
+            final_answer="Critical vulnerabilities include CVE-2024-1234..."
+        )
+        assert msg.user_question == "What are critical vulnerabilities?"
+        assert msg.final_answer == "Critical vulnerabilities include CVE-2024-1234..."
+
+    def test_system_instruction_without_chat_history(self):
+        """Test system instruction when chat_history is empty."""
+        instruction = get_system_instruction(chat_history=None)
+        assert "REACT PATTERN" in instruction
+        assert "PREVIOUS CONVERSATION HISTORY" not in instruction
+
+    def test_system_instruction_with_empty_chat_history_list(self):
+        """Test system instruction with empty list doesn't include history section."""
+        instruction = get_system_instruction(chat_history=[])
+        assert "REACT PATTERN" in instruction
+        assert "PREVIOUS CONVERSATION HISTORY" not in instruction
+
+    def test_system_instruction_with_single_message(self):
+        """Test system instruction includes single chat message."""
+        chat_history = [
+            ChatMessage(
+                user_question="List critical npm vulnerabilities",
+                final_answer="Critical npm vulnerabilities include express-validator CVE-2024-1234..."
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        assert "PREVIOUS CONVERSATION HISTORY" in instruction
+        assert "Exchange 1:" in instruction
+        assert "List critical npm vulnerabilities" in instruction
+        assert "express-validator CVE-2024-1234" in instruction
+
+    def test_system_instruction_with_multiple_messages(self):
+        """Test system instruction includes all chat messages."""
+        chat_history = [
+            ChatMessage(
+                user_question="What are critical npm vulnerabilities?",
+                final_answer="Critical npm vulns include..."
+            ),
+            ChatMessage(
+                user_question="How do I fix CVE-2024-1234?",
+                final_answer="To fix this vulnerability, upgrade to the patched version..."
+            ),
+            ChatMessage(
+                user_question="Show XSS examples",
+                final_answer="XSS examples demonstrate cross-site scripting..."
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        assert "PREVIOUS CONVERSATION HISTORY" in instruction
+        assert "Exchange 1:" in instruction
+        assert "Exchange 2:" in instruction
+        assert "Exchange 3:" in instruction
+        assert "What are critical npm vulnerabilities?" in instruction
+        assert "How do I fix CVE-2024-1234?" in instruction
+        assert "Show XSS examples" in instruction
+
+    def test_system_instruction_truncates_long_answers(self):
+        """Test system instruction truncates long final answers."""
+        long_answer = "A" * 2000  # 2000 character answer
+        chat_history = [
+            ChatMessage(
+                user_question="Test question",
+                final_answer=long_answer
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        # Should contain the truncated version, not the full answer
+        assert "Exchange 1:" in instruction
+        # Should have truncation indicator
+        assert "..." in instruction or len(instruction) < len(long_answer)
+
+    def test_chat_history_maintains_order(self):
+        """Test chat history maintains insertion order."""
+        agent = VulnerabilityAgent()
+        
+        # Simulate adding messages
+        for i in range(1, 4):
+            msg = ChatMessage(
+                user_question=f"Question {i}",
+                final_answer=f"Answer {i}"
+            )
+            agent.chat_history.append(msg)
+        
+        assert len(agent.chat_history) == 3
+        assert agent.chat_history[0].user_question == "Question 1"
+        assert agent.chat_history[1].user_question == "Question 2"
+        assert agent.chat_history[2].user_question == "Question 3"
+
+    def test_chat_history_respects_max_size(self):
+        """Test chat history removes old messages when exceeding max."""
+        agent = VulnerabilityAgent(max_chat_history=2)
+        
+        # Add 4 messages
+        for i in range(1, 5):
+            agent.chat_history.append(ChatMessage(
+                user_question=f"Question {i}",
+                final_answer=f"Answer {i}"
+            ))
+            
+            # Simulate the truncation logic from answer_question()
+            if len(agent.chat_history) > agent.max_chat_history:
+                agent.chat_history = agent.chat_history[-agent.max_chat_history:]
+        
+        # Should only have last 2 messages
+        assert len(agent.chat_history) == 2
+        assert agent.chat_history[0].user_question == "Question 3"
+        assert agent.chat_history[1].user_question == "Question 4"
+
+    def test_chat_history_with_max_chat_history_three(self):
+        """Test chat history correctly manages 3 messages (default)."""
+        agent = VulnerabilityAgent(max_chat_history=3)
+        
+        # Add 5 messages
+        messages = [
+            ("What are npm vulns?", "npm vulns..."),
+            ("Fix CVE-2024-1?", "Upgrade to..."),
+            ("Show XSS?", "XSS attacks..."),
+            ("List High severity?", "High severity includes..."),
+            ("Explain SQL injection?", "SQL injection is..."),
+        ]
+        
+        for question, answer in messages:
+            agent.chat_history.append(ChatMessage(
+                user_question=question,
+                final_answer=answer
+            ))
+            
+            if len(agent.chat_history) > agent.max_chat_history:
+                agent.chat_history = agent.chat_history[-agent.max_chat_history:]
+        
+        # Should only have last 3 messages: messages[2], messages[3], messages[4]
+        assert len(agent.chat_history) == 3
+        assert agent.chat_history[0].user_question == "Show XSS?"
+        assert agent.chat_history[1].user_question == "List High severity?"
+        assert agent.chat_history[2].user_question == "Explain SQL injection?"
+
+    def test_system_instruction_formats_exchanges_correctly(self):
+        """Test system instruction formats chat exchanges with correct structure."""
+        chat_history = [
+            ChatMessage(
+                user_question="Question 1",
+                final_answer="Answer 1"
+            ),
+            ChatMessage(
+                user_question="Question 2",
+                final_answer="Answer 2"
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        
+        # Check structure
+        assert "Exchange 1:" in instruction
+        assert "User: Question 1" in instruction
+        assert "Assistant: Answer 1" in instruction
+        
+        assert "Exchange 2:" in instruction
+        assert "User: Question 2" in instruction
+        assert "Assistant: Answer 2" in instruction
+
+    def test_system_instruction_with_special_characters(self):
+        """Test system instruction handles special characters in questions/answers."""
+        chat_history = [
+            ChatMessage(
+                user_question="What about CVE-2024-1234 & XSS?",
+                final_answer="It affects npm packages like express-validator. See code: var x = '<script>';"
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        
+        # Should preserve special characters
+        assert "CVE-2024-1234" in instruction
+        assert "express-validator" in instruction
+

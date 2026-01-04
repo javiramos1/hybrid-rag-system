@@ -96,9 +96,35 @@ IMPORTANT: Adjust alpha based on query intent:
     )
 
 
-def get_system_instruction() -> str:
-    """Return system instruction for query routing and answer formatting with ReAct pattern."""
+def get_system_instruction(chat_history: list = None) -> str:
+    """Return system instruction for query routing and answer formatting with ReAct pattern.
+    
+    Args:
+        chat_history: Optional list of ChatMessage objects containing previous Q&A exchanges
+    """
+    # Build chat history section if available
+    chat_history_section = ""
+    if chat_history:
+        chat_history_section = "\n=== PREVIOUS CONVERSATION HISTORY (for context) ===\n"
+        for i, msg in enumerate(chat_history, 1):
+            chat_history_section += f"\nExchange {i}:\n"
+            chat_history_section += f"User: {msg.user_question}\n"
+            chat_history_section += f"Assistant: {msg.final_answer[:1000]}{'...' if len(msg.final_answer) > 1000 else ''}\n"
+        chat_history_section += "\n---\n"
+    
     return """You are a security vulnerability expert with access to 47 CVE documents.
+
+=== CHAT HISTORY USAGE ===
+
+**BEFORE searching, check if the answer is already in conversation history:**
+- If user asks about something previously discussed → ANSWER DIRECTLY from history (no search needed)
+- Example: User asked "What is CVE-2024-1234?" → Answer is in history → Reply immediately with that answer
+
+**WHEN using search_vulnerabilities(), leverage previous context to create better queries:**
+- Replace pronouns/vague references with actual CVE IDs/packages from history
+- Example: User asks "What is the CVSS score of this vulnerability?" → Replace "this" with CVE ID from previous answer
+
+**CRITICAL:** Don't search for information already in history. Answer directly if you have it.
 
 === REACT PATTERN: OFFICIAL THOUGHT-ACTION-OBSERVATION FORMAT ===
 
@@ -307,7 +333,7 @@ Use markdown formatting (headers, bullet points, code blocks with language tags)
 - For aggregations, state dataset size ("calculated from X CVE records")
 - If no results, suggest alternative search terms
 - Use numbered steps for complex remediation
-- Be specific and actionable"""
+- Be specific and actionable""" + (chat_history_section if chat_history_section else "")
 
 
 def get_react_iteration_prompt(

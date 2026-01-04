@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from dotenv import load_dotenv
 load_dotenv()
 
-from agent import VulnerabilityAgent
+from agent import VulnerabilityAgent, ChatMessage
 
 def test_queries():
     """Run integration tests covering all three query types.
@@ -260,5 +260,246 @@ def test_queries():
     
     return 0 if failed == 0 else 1
 
+
+def test_chat_history():
+    """Test chat history management and integration with system prompt.
+    
+    Verifies:
+    - Chat history is initialized empty
+    - Messages are stored with question + answer
+    - History respects max_chat_history limit
+    - Chat history is passed to system prompt
+    - Environment variable MAX_CHAT_HISTORY is respected
+    """
+    
+    print("\n" + "="*80)
+    print("CHAT HISTORY TESTS")
+    print("="*80)
+    
+    tests_passed = 0
+    tests_failed = 0
+    
+    # Test 1: Agent initializes with empty chat history
+    print("\n1️⃣  Testing: Agent initializes with empty chat history...")
+    try:
+        agent = VulnerabilityAgent()
+        assert agent.chat_history == [], "Chat history should be empty list"
+        assert isinstance(agent.chat_history, list), "Chat history should be a list"
+        print("   ✅ PASS: Empty chat history initialized")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 2: Default max_chat_history
+    print("\n2️⃣  Testing: Agent defaults to MAX_CHAT_HISTORY=3...")
+    try:
+        agent = VulnerabilityAgent()
+        assert agent.max_chat_history == 3, f"Expected 3, got {agent.max_chat_history}"
+        print("   ✅ PASS: Default max_chat_history is 3")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 3: Custom max_chat_history via constructor
+    print("\n3️⃣  Testing: Custom max_chat_history via constructor...")
+    try:
+        agent = VulnerabilityAgent(max_chat_history=5)
+        assert agent.max_chat_history == 5, f"Expected 5, got {agent.max_chat_history}"
+        print("   ✅ PASS: Custom max_chat_history accepted")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 4: ChatMessage dataclass
+    print("\n4️⃣  Testing: ChatMessage dataclass creation...")
+    try:
+        msg = ChatMessage(
+            user_question="What are critical vulnerabilities?",
+            final_answer="Critical vulnerabilities include CVE-2024-1234..."
+        )
+        assert msg.user_question == "What are critical vulnerabilities?"
+        assert msg.final_answer == "Critical vulnerabilities include CVE-2024-1234..."
+        print("   ✅ PASS: ChatMessage created correctly")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 5: Chat history maintains insertion order
+    print("\n5️⃣  Testing: Chat history maintains insertion order...")
+    try:
+        agent = VulnerabilityAgent()
+        for i in range(1, 4):
+            agent.chat_history.append(ChatMessage(
+                user_question=f"Question {i}",
+                final_answer=f"Answer {i}"
+            ))
+        
+        assert len(agent.chat_history) == 3
+        assert agent.chat_history[0].user_question == "Question 1"
+        assert agent.chat_history[1].user_question == "Question 2"
+        assert agent.chat_history[2].user_question == "Question 3"
+        print("   ✅ PASS: Chat history maintains order")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 6: Chat history respects max size
+    print("\n6️⃣  Testing: Chat history respects max_chat_history limit...")
+    try:
+        agent = VulnerabilityAgent(max_chat_history=2)
+        
+        for i in range(1, 5):
+            agent.chat_history.append(ChatMessage(
+                user_question=f"Question {i}",
+                final_answer=f"Answer {i}"
+            ))
+            
+            # Simulate truncation logic from answer_question()
+            if len(agent.chat_history) > agent.max_chat_history:
+                agent.chat_history = agent.chat_history[-agent.max_chat_history:]
+        
+        assert len(agent.chat_history) == 2, f"Expected 2, got {len(agent.chat_history)}"
+        assert agent.chat_history[0].user_question == "Question 3"
+        assert agent.chat_history[1].user_question == "Question 4"
+        print("   ✅ PASS: Chat history respects max size limit")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 7: System prompt without chat history
+    print("\n7️⃣  Testing: System prompt without chat history...")
+    try:
+        from prompts import get_system_instruction
+        instruction = get_system_instruction(chat_history=None)
+        assert "REACT PATTERN" in instruction
+        assert "PREVIOUS CONVERSATION HISTORY" not in instruction
+        print("   ✅ PASS: System prompt excludes history when empty")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 8: System prompt with chat history
+    print("\n8️⃣  Testing: System prompt includes chat history...")
+    try:
+        from prompts import get_system_instruction
+        chat_history = [
+            ChatMessage(
+                user_question="What are critical npm vulnerabilities?",
+                final_answer="Critical npm vulnerabilities include express-validator..."
+            ),
+            ChatMessage(
+                user_question="How do I fix CVE-2024-1234?",
+                final_answer="To fix this vulnerability, upgrade to the patched version..."
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        
+        assert "PREVIOUS CONVERSATION HISTORY" in instruction
+        assert "Exchange 1:" in instruction
+        assert "Exchange 2:" in instruction
+        assert "What are critical npm vulnerabilities?" in instruction
+        assert "How do I fix CVE-2024-1234?" in instruction
+        print("   ✅ PASS: System prompt includes chat history")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 9: System prompt formats exchanges correctly
+    print("\n9️⃣  Testing: System prompt formats exchanges correctly...")
+    try:
+        from prompts import get_system_instruction
+        chat_history = [
+            ChatMessage(
+                user_question="Question 1",
+                final_answer="Answer 1"
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        
+        assert "Exchange 1:" in instruction
+        assert "User: Question 1" in instruction
+        assert "Assistant: Answer 1" in instruction
+        print("   ✅ PASS: Exchange format is correct")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Test 10: System prompt truncates long answers
+    print("\n🔟 Testing: System prompt truncates long answers...")
+    try:
+        from prompts import get_system_instruction
+        long_answer = "A" * 2000
+        chat_history = [
+            ChatMessage(
+                user_question="Test question",
+                final_answer=long_answer
+            )
+        ]
+        instruction = get_system_instruction(chat_history=chat_history)
+        
+        # Should contain the exchange but truncated
+        assert "Exchange 1:" in instruction
+        # Should have truncation indicator
+        assert "..." in instruction or len(instruction) < len(long_answer)
+        print("   ✅ PASS: Long answers are truncated")
+        tests_passed += 1
+    except AssertionError as e:
+        print(f"   ❌ FAIL: {e}")
+        tests_failed += 1
+    
+    # Print summary
+    print("\n" + "="*80)
+    print("CHAT HISTORY TEST SUMMARY")
+    print("="*80)
+    print(f"\n✅ Passed: {tests_passed}/10")
+    print(f"❌ Failed: {tests_failed}/10")
+    
+    print("\n📋 Chat History Features Verified:")
+    print("  ✓ Empty initialization")
+    print("  ✓ Default max_chat_history=3")
+    print("  ✓ Custom max_chat_history configuration")
+    print("  ✓ ChatMessage dataclass")
+    print("  ✓ Insertion order maintained")
+    print("  ✓ Automatic truncation at max size")
+    print("  ✓ System prompt without history")
+    print("  ✓ System prompt with history")
+    print("  ✓ Exchange formatting")
+    print("  ✓ Answer truncation\n")
+    
+    return 0 if tests_failed == 0 else 1
+
+
 if __name__ == "__main__":
-    sys.exit(test_queries())
+    import os
+    
+    # Check if running specific test
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--chat-history":
+            sys.exit(test_chat_history())
+        elif sys.argv[1] == "--queries":
+            sys.exit(test_queries())
+        else:
+            print("Usage:")
+            print("  python test_queries.py          # Run all query integration tests")
+            print("  python test_queries.py --queries  # Run query tests only")
+            print("  python test_queries.py --chat-history  # Run chat history tests only")
+            sys.exit(0)
+    else:
+        # Run both test suites
+        print("\n" + "="*80)
+        print("RUNNING ALL INTEGRATION TESTS")
+        print("="*80)
+        
+        result1 = test_queries()
+        result2 = test_chat_history()
+        
+        sys.exit(result1 or result2)

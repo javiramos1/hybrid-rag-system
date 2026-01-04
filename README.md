@@ -173,6 +173,17 @@ LOG_LEVEL=INFO
 
 All commands in this repo are designed to run via the Makefile so environment loading and Docker orchestration remain consistent.
 
+## Chat History (Multi-turn conversations)
+
+The agent maintains a conversation history that it uses intelligently:
+
+- **Remembers context**: Previous questions and answers are passed to Gemini in the system prompt
+- **Avoids redundant searches**: If the answer is already in history, Gemini answers directly without calling the search tool
+- **Improves search queries**: Gemini replaces vague references (like "this vulnerability") with actual CVE IDs from previous answers, making searches more precise
+- **Configurable**: Keep last 3 messages by default or set `MAX_CHAT_HISTORY=5` for longer memory
+
+Example: User asks "What is CVE-2024-1234?" → Agent searches and answers. User then asks "What's the CVSS score of this?" → Agent checks history, sees CVE-2024-1234 was discussed, and answers directly from that context.
+
 ## Troubleshooting (common issues)
 
 - Typesense not running: `make docker-up` then `make docker-logs` to inspect logs. Use `make docker-down` then `make docker-up` to restart.
