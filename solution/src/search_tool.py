@@ -1,10 +1,41 @@
 #!/usr/bin/env python3
 """Unified search tool for hybrid RAG queries.
 
-NOTE: In a production environment without high-level framework restrictions,
-this tool would be implemented as an MCP (Model Context Protocol) server using
-FastMCP or similar frameworks to abstract away lower-level details and provide
-a standardized interface for LLM integration.
+Why a search tool abstraction instead of direct Typesense SDK access?
+
+Direct SDK access is flexible but imprecise for LLMs: the agent would need to construct
+raw Typesense queries, manage vector embeddings, and understand filter syntax. Our tool
+abstracts away low-level details with a clean interface: the agent just says what it wants
+(search_type, filters, aggregations) and the tool handles:
+
+- Embedding generation and caching (performance optimization)
+- Filter building (safe expressions, abbreviation normalization)
+- Rank fusion for hybrid search (configurable alpha for BM25/vector balance)
+- Aggregation parsing (facet counts, statistics)
+- Nested document handling (advisory chunks as sub-documents)
+
+Result: The agent focuses on answering questions; we handle search complexity.
+
+Search overview:
+
+- Keyword (BM25): Full-text search on structured fields (CVE ID, package, severity) and
+  advisory content. Fast, best for explicit filters and aggregations.
+- Semantic (Vector): Similarity search on embeddings. Good for conceptual queries
+  ("explain SQL injection") that don't match keywords directly.
+- Hybrid: Combines BM25 + vector with configurable alpha (0=keyword-only, 1=vector-only).
+  Typesense automatically fuses results by score; higher alpha favors semantic relevance.
+
+Aggregations & Faceting:
+
+Faceting counts documents in each category (e.g., "5 npm, 3 pip, 2 maven vulnerabilities").
+Aggregations compute statistics on numeric fields (e.g., "avg CVSS: 8.2, min: 4.1, max: 9.8").
+Both are returned in the SearchResult; the agent uses them to summarize findings
+("Most vulnerabilities are Critical" or "XSS appears in 12 documents").
+
+NOTE: In production without framework restrictions, this tool would be an MCP
+(Model Context Protocol) server using FastMCP to provide a standardized interface
+for LLM integration, replacing raw Typesense SDK calls with a transport-agnostic
+protocol.
 """
 
 import json
@@ -22,7 +53,16 @@ logger = get_logger(__name__)
 
 @dataclass
 class SearchResult:
-    """Structured response from search operations."""
+    """Structured response from search operations.
+    
+    Output fields:
+    - query_type: What kind of search was run (keyword, semantic, or hybrid)
+    - total_found: Total documents matching the query (before pagination)
+    - documents: The actual CVE documents returned (each has metadata + advisory chunks)
+    - aggregations: Stats on numeric fields (CVSS min/max/avg) and category counts
+    - facets: (Legacy) category breakdowns; aggregations preferred
+    - execution_time_ms: How long Typesense took to run the search
+    """
 
     query_type: str
     total_found: int
@@ -42,6 +82,9 @@ class VulnerabilitySearchTool:
             config: Config instance with Typesense and embedding settings
         """
         self.config = config
+        
+        # Connect to Typesense server; handles both keyword and vector queries
+        # In Production we would add timeouts, retries, and error handling
         self.client = typesense.Client(
             {
                 "nodes": [
@@ -55,6 +98,8 @@ class VulnerabilitySearchTool:
                 "connection_timeout_seconds": 10,
             }
         )
+        
+        # Load embedding model for semantic search; encodes queries into vectors
         self.embedding_model = SentenceTransformer(config.embedding_model)
 
         # Load vulnerability type mapping from Typesense (lazy-loaded on first use)
@@ -67,6 +112,22 @@ class VulnerabilitySearchTool:
         """Lazily load vulnerability type mapping from Typesense.
 
         Maps common abbreviations (RCE, XSS, etc.) to their full names from the database.
+        
+        Why we need this:
+        - CSV files and advisories use inconsistent naming: some have abbreviations (RCE) 
+          while others use full names (Remote Code Execution)
+        - Users might ask "show RCE vulnerabilities" but the database has "Remote Code Execution"
+        - We query Typesense to learn what names are actually stored, then create mappings
+        - This ensures filters work regardless of whether the user says RCE or Remote Code Execution
+        - The search engine doesn't understand semantic equivalence, so we provide explicit mappings
+        
+        Production alternatives (not implemented here):
+        - Connect the agent to a glossary/taxonomy service: agent learns abbreviations upfront,
+          then queries the search engine with normalized names
+        - Improve ingestion pipeline: add synonym fields to documents at index time, so Typesense
+          natively handles both "RCE" and "Remote Code Execution" in searches
+        
+        Both approaches solve this more elegantly, but for now this simple mapping is sufficient.
         Only creates mappings for abbreviations not already in the database.
         """
         if self._vulnerability_type_mapping is not None:
@@ -191,13 +252,14 @@ class VulnerabilitySearchTool:
             },
         )
 
+        # Build the base search query (keyword, semantic, or hybrid)
         search_params = self._build_search_params(
             query, search_type, per_page, sort_by, hybrid_search_alpha, query_embedding
         )
 
         logger.debug(f"Built search params: {search_params}")
 
-        # Apply filters
+        # Apply filters (CVE IDs, ecosystem, severity, etc.)
         filters = self._build_filters(
             cve_ids,
             ecosystems,
@@ -210,22 +272,27 @@ class VulnerabilitySearchTool:
             search_params["filter_by"] = filters
             logger.debug(f"Filters: {filters}")
 
-        # Add faceting for aggregations and category counts
+        # Request aggregations (counts per category, stats on numeric fields)
+        # Faceting tells Typesense: "for each unique value in this field, count how many 
+        # documents have it" (for strings) or "compute min/max/avg" (for numbers).
+        # Example: facet_by="ecosystem,severity" returns {ecosystem: {npm: 10, pip: 8, maven: 5}, 
+        # severity: {Critical: 8, High: 10, Low: 5}}. Used by agent to summarize results
+        # ("Most are Critical") or suggest follow-up filters.
         if facet_by:
             search_params["facet_by"] = facet_by
             logger.debug(f"Faceting by: {facet_by}")
 
-        # Add grouping for deduplication
+        # Optionally group results for diversity (e.g., 3 npm, 3 pip, 3 maven)
         if group_by:
             search_params["group_by"] = group_by
             search_params["group_limit"] = 3
             logger.debug(f"Grouping by: {group_by}")
 
-        # Execute search
+        # Execute search against Typesense
         logger.debug(f"Search params: {json.dumps(search_params, indent=2, default=str)}")
         try:
             if search_type in ("semantic", "hybrid"):
-                # Use multi_search POST endpoint for vector queries
+                # Vector queries use multi_search endpoint (handles rank fusion internally)
                 search_request = {
                     "searches": [
                         {
@@ -238,7 +305,7 @@ class VulnerabilitySearchTool:
                 multi_response = self.client.multi_search.perform(search_request, {})
                 response = multi_response["results"][0]
             else:
-                # Use standard search for keyword queries
+                # Keyword queries use standard endpoint (BM25 only)
                 response = self.client.collections["vulnerabilities"].documents.search(
                     search_params
                 )
@@ -246,11 +313,8 @@ class VulnerabilitySearchTool:
             logger.error(f"Search failed: {e}", exc_info=True)
             raise
 
-        # Parse aggregations
+        # Parse aggregations from response (facet counts and statistics)
         aggregations = self._parse_aggregations(response)
-
-        if aggregations:
-            logger.debug(f"Aggregations found: {aggregations}")
 
         # Extract documents (handle grouped results if group_by was used)
         if group_by and "grouped_hits" in response:
@@ -266,6 +330,7 @@ class VulnerabilitySearchTool:
 
         logger.debug(f"Returned {len(documents)} documents out of {response.get('found', 0)} found")
 
+        # Return structured result with documents, stats, and timing
         result = SearchResult(
             query_type=search_type,
             total_found=response.get("found", 0),
@@ -294,7 +359,29 @@ class VulnerabilitySearchTool:
         hybrid_search_alpha: float = 0.5,
         query_embedding: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
-        """Build Typesense search parameters based on search type."""
+        """Build Typesense search parameters based on search type.
+        
+        Constructs the low-level Typesense query dict. Three search strategies:
+        
+        1. Keyword (BM25): Full-text search using BM25 ranking algorithm
+           - Matches exact/partial keywords in CVE ID, package name, severity, etc.
+           - Best for: "List all Critical npm vulnerabilities", "Find CVE-2024-1234"
+           - Fast, precise for structured filters + text queries
+           
+        2. Semantic (Vector): Embedding-based similarity search
+           - Encodes user query as vector, finds nearest embeddings in database
+           - Best for: "Explain SQL injection", "Show code examples for XSS"
+           - Captures intent/concepts even if keywords don't match exactly
+           - Uses pre-computed embedding if provided (avoids re-encoding)
+           
+        3. Hybrid: Combines BM25 + vector with rank fusion
+           - Runs both searches, Typesense merges results using configurable alpha weight
+           - Best for: "Show npm vulnerabilities with high CVSS + explain the risk"
+           - alpha: 0=pure keyword, 0.5=balanced, 1.0=pure vector
+           - Handles both exact matches (keywords) and conceptual understanding (embeddings)
+
+        Agent decides which strategy to use based on query type.
+        """
         params = {"per_page": per_page}
 
         if search_type == "keyword":
@@ -386,13 +473,26 @@ class VulnerabilitySearchTool:
         return " && ".join(filters) if filters else None
 
     def _parse_aggregations(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract aggregation results from Typesense response."""
+        """Extract aggregation results from Typesense response.
+        
+        How aggregations work:
+        - Typesense returns facet_counts: category counts (npm: 10, pip: 8) and stats (min/max/avg)
+        - We parse these into a clean dict for the agent: {"ecosystem": {"counts": [...]}, 
+          "cvss_score": {"stats": {min: 4.1, max: 9.8, avg: 7.2}}}
+        
+        Why needed:
+        - Answers to "What's the average CVSS?" or "How many npm vulnerabilities?" come from stats/counts
+        - Agent uses aggregations to summarize large result sets without listing every document
+        - Enables questions like "Which ecosystem has the most Critical vulnerabilities?" 
+          (combine counts + filters to show breakdown by category)
+        - Reduces response size: return 10 documents + aggregations instead of all 47
+        """
         aggregations = {}
 
         if "facet_counts" in response:
             for facet in response["facet_counts"]:
                 field_name = facet.get("field_name")
-                # Handle both statistics and category counts
+                # Handle both statistics (numeric fields) and category counts (string fields)
                 facet_data = {}
                 if facet.get("stats"):
                     facet_data["stats"] = facet["stats"]

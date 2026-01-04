@@ -85,9 +85,9 @@ def get_logger(name: str) -> logging.Logger:
         if log_format == "json":
             formatter = JSONFormatter()
         else:
-            # Simple format: [timestamp] logger_name - LEVEL - message [extra fields]
+            # Simple format: logger_name - LEVEL - message [extra fields]
             formatter = SimpleFormatter(
-                "[%(asctime)s] %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+                "%(name)s - %(levelname)s - %(message)s"
             )
 
         handler.setFormatter(formatter)

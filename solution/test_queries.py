@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Integration tests: run multiple queries covering all three RAG types.
 
+Reviewer: This is the main test file that runs end-to-end queries against the full system. 
+You can ignore this and other test files for the purpose of the challenge.
+
 This script verifies end-to-end functionality:
 1. Structured-only queries: CSV filtering, aggregation, type/ecosystem selection
 2. Unstructured-only queries: Semantic search of advisories, explanation requests

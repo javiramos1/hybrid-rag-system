@@ -1,24 +1,52 @@
 #!/usr/bin/env python3
-"""LLM agent with ReAct pattern for intelligent vulnerability query answering.
+"""LLM agent with ReAct pattern for vulnerability question answering.
 
-DESIGN NOTES:
-- Implements basic ReAct (Reasoning + Acting) pattern for multi-iteration search and synthesis
-- Includes basic chat history and conversation memory for multi-turn interactions
-- Uses low-level google-genai library for direct API control (per requirement to avoid
-  high-level RAG frameworks like LangChain, LlamaIndex, PydanticAI, etc. during challenge)
-- ⚠️ PRODUCTION NOTE: This is a basic implementation. For production environments, use
-  established frameworks (LangChain, PydanticAI, etc.) which provide:
-  - Robust error handling and automatic retries with exponential backoff
-  - Built-in state management and conversation memory optimization
-  - Sophisticated function calling orchestration and validation
-  - Production-grade observability and debugging tools
-  - Optimized memory and context window management
-  - Multi-step agent planning and reflection loops
-- Current Trade-offs (intentional for learning): Limited error handling, manual response 
-  parsing, verbose explicit logic flow. This makes decision logic transparent but less 
-  maintainable at scale. It also makes the code harder to follow compared to using a
-  high-level framework.
-- Iteration tracking: Agent knows when to search again vs. when to answer
+WHAT THIS AGENT DOES:
+
+Orchestrates iterative search and synthesis of answers to vulnerability questions using
+the ReAct (Reasoning + Acting) pattern:
+
+1. User asks: "What npm vulnerabilities are Critical?"
+2. Agent reasons: "I need structured data + aggregations. Use keyword search."
+3. Agent acts: Calls search_vulnerabilities() with appropriate filters
+4. Agent evaluates: "I got 5 documents + CVSS stats. That's enough."
+5. Agent synthesizes: Generates final answer with citations (CVE IDs, versions, CVSS)
+6. If insufficient data: Loop back to step 2 with refined search (max 6 iterations)
+
+HOW IT'S IMPLEMENTED:
+
+The agent uses low-level google-genai library to:
+- Issue prompts to Gemini with tools (search_vulnerabilities declared as JSON schema)
+- Parse function calls from LLM responses (extract search parameters)
+- Execute searches and collect results into state
+- Track iteration count, documents, and aggregations
+- Detect when LLM returns "Final Answer:" and exit the loop
+- Maintain chat history for multi-turn conversations
+
+IMPORTANT: This is mostly boilerplate code. Most of the complexity here (response parsing,
+retry logic, state management, chat history, function calling orchestration) is completely
+unnecessary in production—it's only needed because the challenge requires low-level API control.
+
+Frameworks like PydanticAI automatically handle:
+- Function call parsing and validation (no manual string parsing)
+- Automatic retries with exponential backoff (built-in)
+- ReAct pattern orchestration (no manual iteration loops)
+- Chat history and conversation memory (automatic)
+- Tool calling and result collection (seamless)
+- Type-safe response handling (no try/except chains)
+
+In Production, besides using high-level frameworks like PydanticAI, we would also leverage tracing tools like LangSmith 
+for monitoring, debugging, and improving agent performance and other MCP servers for long term memory, web search, library search (Context7), etc.
+
+FOCUS OF REVIEW: The real RAG logic is in search_tool.py (hybrid search, filters, 
+aggregations) and prompts.py (routing decisions). This file is verbose scaffolding 
+that makes implementation details explicit but isn't where the intelligence happens.
+
+CURRENT TRADE-OFFS (intentional for learning):
+- Limited error handling, manual response parsing, verbose explicit logic flow
+- Makes decision logic transparent but less maintainable at scale
+- Makes the code harder to follow compared to using a high-level framework
+- Iteration tracking: Agent manually tracks when to search again vs. when to answer
 """
 
 from typing import Optional, List
@@ -178,7 +206,7 @@ class VulnerabilityAgent:
             self.chat_history = self.chat_history[-self.config.max_chat_history:]
         
         logger.info(f"Chat history size: {len(self.chat_history)}/{self.config.max_chat_history}")
-        logger.info(f"\n✅ Final answer ({len(result)} chars)\n")
+        logger.info(f"\n✅ Final answer ({len(result)} chars)\n\n")
         return result
 
     def _execute_search_and_collect(self, function_call, state: IterationState) -> None:

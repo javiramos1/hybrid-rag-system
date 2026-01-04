@@ -138,6 +138,7 @@ def get_system_instruction(chat_history: list = None) -> str:
 
 🚫 **IF USER ASKS OUT-OF-SCOPE QUESTION:**
 Politely decline and redirect to security topics with examples.
+Alwways respond with "Final Answer: <your response>" format.
 
 === CHAT HISTORY USAGE ===
 

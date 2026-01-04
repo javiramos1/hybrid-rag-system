@@ -87,7 +87,7 @@ This table shows the most useful targets you'll use during review.
 
 ### Why all-MiniLM-L6-v2 for embeddings?
 
-We chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
+I chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
 
 **Practical reasons:**
 
@@ -106,7 +106,7 @@ If you scale to 10,000+ documents or see poor retrieval in testing, consider all
 
 ### Why Typesense? (Design Decision)
 
-We evaluated four major search approaches:
+I evaluated four major search approaches:
 
 | Approach | Structured | Semantic | Hybrid | Complexity |
 | --- | --- | --- | --- | --- |
@@ -128,7 +128,7 @@ We evaluated four major search approaches:
 - **SQLite + FAISS**: Two separate systems requiring glue code. FAISS has no filtering—inefficient.
 - **PostgreSQL only**: Can't do semantic search.
 
-**Real-world context:** We reviewed public services like Snyk and observed they rely on search engines. This influenced our assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
+**Real-world context:** I reviewed public services like [Snyk Security](https://security.snyk.io/) and observed they rely on search engines. This influenced our assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
 
 **Additional trade-offs:**
 
@@ -267,7 +267,6 @@ The agent implements **ReAct (Reasoning + Acting)** with automatic stopping:
   - Broad search ("*") returns 0 results (data doesn't exist)
   - Text response received (indicates thinking completed)
 - Max 6 iterations; typically finishes in 1-3 iterations
-- **Key safety mechanism**: Every LLM response must be either a function call OR text. If neither, retry. This prevents infinite loops.
 
 **Performance optimization**: The question embedding is computed once and cached across all ReAct iterations (avoids re-encoding in semantic/hybrid searches).
 
@@ -286,9 +285,6 @@ search_vulnerabilities(
 ```
 
 Gemini automatically determines the best parameters. No hardcoded parsing rules.
-
-**Note on `group_by`:** Rarely needed with the CVE-centric design. Each CVE is one unique document (no duplicates). Use explicit filters (`ecosystems=["npm", "pip"]`) instead of `group_by` for clarity. Keep `group_by` only if you want to limit results per category (e.g., show at most 3 npm, 3 pip, 3 maven vulnerabilities for diversity).
-
 
 ### CVE-centric document design with nested advisory chunks
 
@@ -364,7 +360,7 @@ For 8 well-structured advisory documents, simple section-based chunking gives us
 
 ## Performance
 
-**Ingestion**: 10-15 seconds (CSV denormalization + advisory merging + embeddings + indexing)
+**Ingestion**: 10-15 seconds (CSV denormalization + advisory merging + embeddings + indexing) using Polars
 
 **Queries**: 1.5-4 seconds total
 
@@ -374,12 +370,6 @@ For 8 well-structured advisory documents, simple section-based chunking gives us
 **Data**: 47 CVE documents (each with metadata + nested advisory chunks from 8 advisory files)
 
 **Search**: Hybrid (BM25 + vector) across CVE metadata + nested advisory chunks
-
-**Resources**:
-
-- Memory: 500MB-1GB
-- Storage: 50MB (Typesense index)
-
 
 ## Where to start reviewing
 
@@ -407,9 +397,10 @@ For 8 well-structured advisory documents, simple section-based chunking gives us
 
 4. **Review the code:**
 
-   - Start with `src/agent.py` for the orchestration pattern
+   - Start with `src/agent.py` for the orchestration pattern, this is mainly boiler plate code, not the main focus
    - Check `src/search_tool.py` for the unified search interface
    - See `src/ingest.py` for CVE-centric document merging and embedding generation
+   - The rest of the files are utitility classes that can be ignored.
 
 5. **Verify the changes:**
 
@@ -422,104 +413,53 @@ For 8 well-structured advisory documents, simple section-based chunking gives us
 
 ## Production Considerations
 
-This codebase is a working demonstration of a hybrid RAG system designed for a code challenge. For production deployment, several important enhancements would be necessary:
+This is a code challenge demonstration. For production, these enhancements are essential:
+
+### High-level Framework
+
+**Current**: Low-level google-genai + manual orchestration (200+ lines of boilerplate)  
+**Production**: Use PydanticAI, LangChain, or LlamaIndex. They automatically handle:
+- ReAct pattern, function calling, response parsing
+- Retries with exponential backoff
+- Chat history and state management
+- Type-safe response validation
+
+Result: agent.py shrinks from 200+ lines to ~30 lines of actual logic.
 
 ### Observability & Monitoring
 
-**Current state**: Basic structured logging to stderr.
-
-**Production additions**:
-
-- **LLM observability** (LangSmith, LangFuse): Trace all Gemini calls, function invocations, token usage, and latencies
-- **Search metrics**: Track Typesense query performance, index size, vector search latency
-- **Application metrics**: Prometheus/Grafana for query throughput, error rates, end-to-end latency
-- **Request tracing**: OpenTelemetry for distributed tracing across services
-- **Cost tracking**: Monitor API spending (Gemini tokens, Typesense queries)
-
-### Agent Intelligence
-
-**Current state**: Single-turn queries, no context management.
-
-**Production additions**:
-
-- **Conversation memory**: Long-term (persistent DB) and short-term (context window) memory
-- **Refinement loop**: Allow users to ask follow-up questions with context
-- **Confidence scoring**: Surface uncertainty when results are ambiguous
-- **Query rewrites**: Automatically expand/clarify user questions before search
-- **Result ranking**: Custom ranking based on user feedback and domain expertise
+**Current**: Basic structured logging to stderr  
+**Add**: LLM observability (LangSmith, LangFuse) for Gemini traces, Typesense metrics, Prometheus/Grafana dashboards, OpenTelemetry for distributed tracing, cost tracking
 
 ### Error Handling & Safeguards
 
-**Current state**: Basic retries with backoff, minimal validation.
-
-**Production additions**:
-
-- **Rate limiting**: Protect Typesense and Gemini APIs from overload
-- **Input validation**: Sanitize/validate user queries before processing
-- **Output validation**: Verify LLM responses contain citations and factual claims
-- **Fallback strategies**: Graceful degradation (keyword-only if semantic fails, cached results, etc.)
-- **Audit logging**: Record all queries, answers, and user feedback for compliance
-- **PII detection**: Flag sensitive data in results before returning to users
-
-### Framework & Code Organization
-
-**Current state**: Low-level libraries (google-genai, typesense-python), manual orchestration.
-
-**Production additions**:
-
-- **High-level framework**: LangChain, LlamaIndex, or Haystack for cleaner abstraction
-- **Better prompt management**: Prompt versioning, A/B testing, dynamic prompt selection
-- **Structured outputs**: Pydantic models for LLM response validation
-- **MCP Server deployment**: Expose as Model Context Protocol server for integration with other tools
-- **Configuration as code**: Centralized config management instead of env vars
+**Current**: Basic retries with backoff  
+**Add**: Rate limiting, input/output validation, PII detection, audit logging, fallback strategies (keyword-only if semantic fails, cached results)
 
 ### Testing & Evaluation
 
-**Current state**: 31 unit/integration tests.
-
-**Production additions**:
-
-- **End-to-end tests**: Real Gemini API calls with recorded responses
-- **RAG evaluations**: Measure retrieval quality (precision, recall, NDCG)
-- **Answer quality metrics**: BLEU, ROUGE, semantic similarity to ground truth
-- **Regression tests**: Catch answer quality degradation with new LLM versions
-- **User feedback loop**: Explicit rating system to improve models
-- **A/B testing framework**: Test different prompts, search strategies, ranking approaches
+**Current**: 31 unit/integration tests  
+**Add**: RAG quality metrics (precision, recall, NDCG), answer quality scoring (BLEU, ROUGE), regression tests for LLM version changes, user feedback loop, A/B testing framework
 
 ### Deployment & Operations
 
-**Current state**: Docker Compose for local Typesense, Makefile for development.
+**Current**: Docker Compose for local Typesense, Makefile for development  
+**Add**: Kubernetes for Typesense cluster scaling, CI/CD pipeline (automated testing, linting, type checks), monitoring dashboards, alerting, secrets management (Vault), load testing, backup/recovery
 
-**Production additions**:
+### Framework & Code Organization
 
-- **Kubernetes/cloud deployment**: Scale Typesense cluster, manage Gemini API quotas
-- **CI/CD pipeline**: Automated testing, linting, type checking on every commit
-- **Monitoring dashboards**: Real-time visibility into query latency, error rates, costs
-- **Alerting**: Notify ops when error rates spike or latency degrades
-- **Secrets management**: HashiCorp Vault or cloud provider secrets manager
-- **Load testing**: Ensure system handles expected query volume
-- **Backup/recovery**: Regular snapshots of Typesense index
+**Current**: Manual orchestration, env vars for config  
+**Add**: Prompt versioning and A/B testing, structured outputs (Pydantic), MCP Server deployment for integration with other tools, configuration as code (centralized config management)
 
-### Search & Retrieval Enhancements
+### Lower Priority (dataset-specific)
 
-**Current state**: Single keyword/semantic/hybrid search types with faceting by ecosystem, severity, CVE ID, and has_advisory.
+These were evaluated but skipped due to small dataset (47 CVEs):
+- **Embedding compression**: Current storage ~50KB; 8-bit quantization saves negligible space
+- **Query expansion with synonyms**: Only 34 vulnerability types; insufficient variation to justify complexity
+- **Temporal faceting**: Data spans 9 months; insufficient diversity
+- **Custom re-ranking**: Typesense's native rank fusion already strong; custom ranking requires labeled training data
+- **Multi-granularity embeddings**: Current section-based chunking (48 chunks) already provides retrieval precision needed
 
-**Potential future improvements** (evaluated and deemed lower priority):
+### Why These Aren't All Included
 
-- **Embedding compression (8-bit quantization)**: Would reduce vector storage by 97% (384 dims → 384 bytes per embedding). Current dataset is tiny (48 advisory chunks + 47 CVE embeddings = ~50KB total), so negligible benefit.
-- **Temporal facets (published_year, published_month)**: Dataset spans only 9 months (Jan-Sep 2024), insufficient diversity for meaningful time-based analysis.
-- **Section-level faceting**: Advisory chunks already tagged by section (summary, remediation, code_example, etc.) and searchable via filters. Faceting by section would show "100% have remediation" since all advisories follow standard template.
-- **Query expansion with security synonyms**: Useful for larger datasets with domain terminology variation. With 34 vulnerability types and 8 advisory documents, the dataset is too small to justify the complexity.
-- **Multi-granularity embeddings (document + section + sentence)**: Would enable "show code examples for XSS" queries. Current section-based chunking (48 advisory chunks) already provides sentence-level retrieval precision without complexity overhead.
-- **Result re-ranking**: Useful when source order diverges from relevance. Typesense's native rank fusion (BM25 + vector with configurable alpha) typically provides strong ordering; custom re-ranking would require labeled training data.
-
-### Why These Aren't Included
-
-Adding all these features would require **considerable effort** and increase the codebase size by 5-10x:
-
-- Observability libraries add infrastructure complexity and vendor dependencies
-- Memory management requires persistent storage design and context window optimization
-- Production safeguards need domain expertise and regulatory knowledge
-- High-level frameworks improve code clarity but hide implementation details (counter to "core logic from scratch" requirement)
-- Comprehensive testing requires labeled datasets and metric definitions
-- Search enhancements are optimizations for scale (1M+ documents) and are premature on a 47-CVE dataset
+Production features require 5-10x more code and infrastructure complexity. For a code challenge, focus is on demonstrating RAG architecture (search_tool.py, prompts.py) rather than production scaffolding.
