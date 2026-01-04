@@ -144,18 +144,36 @@ graph TD
 
 The agent uses **ReAct (Reasoning + Acting)** to iteratively search and synthesize answers:
 
-1. **User asks a question** in plain English
-2. **Gemini reasons** about what to search for and calls `search_vulnerabilities()` with appropriate parameters
-3. **Search tool executes** the right strategy (Gemini automatically chooses):
-   - **Keyword search** (BM25) for exact metadata matches → "List all Critical npm packages"
-   - **Semantic search** (vector) for conceptual understanding → "Explain SQL injection"
-   - **Hybrid** (combined) for questions needing both → "How do I fix CVE-2024-1234?"
-4. **Typesense returns** results from 47 CVE documents (automatic rank fusion)
-5. **Gemini re-evaluates**: Does it have enough info to answer, or search again? This repeats (up to 5 iterations)
-6. **Gemini synthesizes** a final answer with citations (CVE IDs, versions, CVSS scores)
-7. **Result shown** to user with sources
+```mermaid
+sequenceDiagram
+    User->>Agent: Plain English question
+    Agent->>Agent: Reason: What search type needed?
+    Agent->>Search: Call search_vulnerabilities()
+    Search->>Typesense: BM25, vector, or hybrid query
+    Typesense->>Search: Results from 47 CVE documents
+    Search->>Agent: SearchResult (documents + aggregations)
+    Agent->>Agent: Evaluate: Have enough data?
+    alt Has sufficient data
+        Agent->>Agent: Synthesize answer from collected docs
+        Agent->>User: Final answer with citations
+    else Need more information
+        Agent->>Search: Search again (iterate up to 6 times)
+    end
+```
 
-**Why ReAct?** The LLM can iterate—ask follow-up searches if the first result wasn't quite right, and decide when to stop. No hardcoded heuristics. This handles ambiguous questions naturally.
+**Flow (high-level):**
+
+1. User asks a question in plain English
+2. Gemini decides: search for more data or synthesize an answer?
+3. If searching: calls `search_vulnerabilities()` with appropriate parameters
+   - **Keyword** (BM25): Metadata filtering, aggregations → "List Critical npm vulnerabilities"
+   - **Semantic** (vector): Advisory understanding → "Explain SQL injection"
+   - **Hybrid**: Both combined → "How to fix CVE-2024-1234?"
+4. Results collected; Gemini evaluates: enough info to answer?
+5. If yes: synthesize final answer with citations and sourcing
+6. If no: iterate and search again (max 6 iterations)
+
+**Why ReAct?** Allows natural iteration—search, evaluate, refine. Stops automatically when sufficient context is gathered. No hardcoded stopping rules.
 
 ## Configuration
 
@@ -218,13 +236,19 @@ solution/
 
 ### ReAct agent with embedding caching
 
-The agent implements ReAct (Reasoning + Acting):
+The agent implements **ReAct (Reasoning + Acting)** with automatic stopping:
 
-- Iteratively calls `search_vulnerabilities()` and evaluates results
-- Gemini decides when to search again or synthesize an answer
-- Max 5 iterations, but typically finishes in 1-3 iterations
+- Iteratively calls `search_vulnerabilities()` and collects documents/aggregations
+- **Automatic decision logic**: Synthesize answer when:
+  - 3+ CVE documents collected, OR
+  - Aggregation/statistics data available, OR  
+  - 3+ different searches attempted, OR
+  - Broad search ("*") returns 0 results (data doesn't exist)
+  - Text response received (indicates thinking completed)
+- Max 6 iterations; typically finishes in 1-3 iterations
+- **Key safety mechanism**: Every LLM response must be either a function call OR text. If neither, retry. This prevents infinite loops.
 
-**Performance optimization**: The question embedding is computed once and reused across all ReAct iterations.
+**Performance optimization**: The question embedding is computed once and cached across all ReAct iterations (avoids re-encoding in semantic/hybrid searches).
 
 ### Single unified search function
 
