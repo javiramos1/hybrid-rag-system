@@ -111,38 +111,35 @@ You will use the standard ReAct format to iterate:
 
 **CRITICAL RULE: EVERY RESPONSE MUST CONTAIN EXACTLY ONE OF:**
 ✅ A call to search_vulnerabilities() function, OR
-✅ Your final answer text with "Final Answer:" prefix
+✅ Your complete final answer with "Final Answer:" prefix
 
 ❌ NEVER respond with just thinking/reasoning without one of the above
 ❌ NEVER leave the response empty or indeterminate
 ❌ ALWAYS decide: search or answer - no other options
+❌ NEVER respond with "Action:", "Thought:", "Action Input:" text UNLESS you also provide "Final Answer:"
 
 STOPPING CONDITIONS (when to provide Final Answer):
-✅ You have 3+ relevant documents collected from searches
+✅ You have 1+ relevant documents collected from searches (SUFFICIENT for most queries)
 ✅ You have aggregation/statistics data (counts, averages, min/max CVSS)
 ✅ You've already tried 2+ different search approaches (different search_type or different parameters)
 ✅ A broad search ("*") returned 0 results (data doesn't exist)
-✅ First search for specific query returned results (1+ CVE for list/filter queries, 3+ for conceptual queries)
+✅ First search for specific query returned results (1+ CVE for ANY query type)
 ✅ You have sufficient context to answer comprehensively
 
 CRITICAL ABORT CRITERIA (STOP searching, ANSWER immediately):
-🛑 After 1 search stop if you already have the ANSWER
+🛑 After 1 search stop if you have 1+ documents with relevant advisory content → ANSWER NOW
+🛑 After 1 search with any results → ANSWER (don't do a second search just to be thorough)
 🛑 After 2 searches with same/similar results → ANSWER (don't keep retrying identical searches)
-🛑 After 3+ total search attempts → ANSWER (even if results seem incomplete)
+🛑 After 2+ total search attempts → ANSWER (even if results seem incomplete)
+🛑 NEVER do more than 2 searches - always answer after the 2nd search
+🛑 If the same 1 document keeps appearing → ANSWER (it's the only relevant one)
 
 DECISION MAKING:
 - Aggregation queries (avg CVSS, count CVEs): ANSWER after first search returns stats
-- Specific CVE queries: ANSWER after first search if found, else try broader search
-- Explanation queries (explain XSS, code examples): ANSWER after collecting 3+ documents
-- List/filter queries (list vulnerabilities, packages with X): ANSWER after first search returns 3+ results
-- If results < 3 after 2+ attempts, synthesize answer from what you have (better than infinite retry loop)
-
-KEY RULES:
-- ALWAYS end with either a function call OR "Final Answer: ..." text
-- When providing final answer, include "Final Answer:" prefix so it's detectable
-- Synthesize answers from collected documents/aggregations
-- Always cite sources and include grounding statements
-- If 0 results after broad search, explain why and suggest alternatives
+- Specific CVE queries: ANSWER after first search if found, else try broader search then ANSWER
+- Explanation queries (explain XSS, code examples): ANSWER after 1-2 searches collect documents
+- List/filter queries (list vulnerabilities, packages with X): ANSWER after first search returns 1+ results
+- If results < 3 after 2 attempts, synthesize answer from what you have (better than infinite retry loop)
 
 === DATA SCHEMA & AVAILABLE INFORMATION ===
 
@@ -250,6 +247,23 @@ Valid: ecosystems=[npm, pip, maven], severity=[Critical, High, Medium, Low].
 
 === FINAL ANSWER FORMATTING & ERROR HANDLING ===
 
+IMPORTANT: Follow these formatting rules for Final Answer ONLY:
+
+KEY RULES FOR FINAL ANSWER:
+- ALWAYS start with "Final Answer:" prefix when you have enough information to answer
+- Generate the COMPLETE, COMPREHENSIVE answer immediately after "Final Answer:" prefix
+- Include ALL required elements in the answer:
+  * Clear opening statement answering the question
+  * Specific CVE IDs, CVSS scores, package names, ecosystems, versions
+  * Code examples (vulnerable + fixed patterns) where applicable
+  * Remediation steps or explanations
+  * Markdown formatting (headers ##, bullets, code blocks ```python/```javascript)
+  * Grounding statement at the end: "Source: X CVE records from the vulnerability database"
+- DO NOT generate just "Final Answer:" without the complete answer text
+- YOU MUST synthesize the answer NOW
+- DO NOT respond with "Action:", "Thought:", "Action Input:" when you have data - use "Final Answer:" instead
+- If 0 results after broad search, explain why and suggest alternatives
+
 CRITICAL: When providing Final Answer, ALWAYS generate helpful, user-friendly response. Never return empty text or placeholder responses.
 
 **For Successful Queries (include):**
@@ -300,8 +314,9 @@ def get_react_iteration_prompt(
     user_question: str,
     iteration: int,
     previous_searches: list,
-    documents_collected: int = 0,
-    aggregations_collected: int = 0,
+    collected_documents_data: dict = None,
+    collected_aggregations_data: dict = None,
+    is_final_iteration: bool = False,
 ) -> str:
     """Build a ReAct-format prompt following the official ReAct pattern.
 
@@ -311,23 +326,72 @@ def get_react_iteration_prompt(
         user_question: Original user question
         iteration: Current iteration number (1-indexed)
         previous_searches: List of (search_type, query, results_count) tuples from previous iterations
-        documents_collected: Number of unique CVE documents collected so far
-        aggregations_collected: Number of aggregation/statistic fields collected so far
+        collected_documents_data: Actual document data collected (dict of CVE ID -> document)
+        collected_aggregations_data: Actual aggregation data collected (dict of field -> stats)
+        is_final_iteration: True if this is the final iteration, demand answer instead of search
 
     Returns:
-        Prompt in official ReAct format for Gemini
+        Prompt in official ReAct format for Gemini with actual search results
     """
+    # Initialize mutable defaults
+    if collected_documents_data is None:
+        collected_documents_data = {}
+    if collected_aggregations_data is None:
+        collected_aggregations_data = {}
+    
+    # Calculate counts from actual data
+    documents_collected = len(collected_documents_data)
+    aggregations_collected = len(collected_aggregations_data)
     # Build the scratchpad (observation history)
     scratchpad = ""
     if previous_searches:
-        scratchpad += f"\nSearch History ({len(previous_searches)} attempts):\n"
+        scratchpad += f"\n{'='*80}\nSearch History ({len(previous_searches)} attempts):\n"
         for i, (search_type, query, results_count) in enumerate(previous_searches, 1):
             scratchpad += f"Observation {i}: Searched with {search_type} (query: '{query}') → Found {results_count} results\n"
     
-    # Add collected data context
-    scratchpad += f"\nData Collected So Far:\n"
+    # Add collected data summary
+    scratchpad += f"\n{'='*80}\nData Collected So Far:\n"
     scratchpad += f"  - Unique CVE Documents: {documents_collected}\n"
     scratchpad += f"  - Aggregation Fields: {aggregations_collected}\n"
+    
+    # Add actual aggregation results
+    if collected_aggregations_data:
+        scratchpad += f"\n{'='*80}\nAggregation Results:\n"
+        for field, agg_data in collected_aggregations_data.items():
+            if isinstance(agg_data, dict):
+                if "stats" in agg_data:
+                    stats = agg_data["stats"]
+                    scratchpad += f"  {field} Statistics:\n"
+                    scratchpad += f"    - Average: {stats.get('avg', 'N/A')}\n"
+                    scratchpad += f"    - Minimum: {stats.get('min', 'N/A')}\n"
+                    scratchpad += f"    - Maximum: {stats.get('max', 'N/A')}\n"
+                    scratchpad += f"    - Sum: {stats.get('sum', 'N/A')}\n"
+                if "counts" in agg_data:
+                    scratchpad += f"  {field} Counts:\n"
+                    for count_item in agg_data["counts"][:10]:  # Top 10
+                        scratchpad += f"    - {count_item.get('value', 'N/A')}: {count_item.get('count', 0)} vulnerabilities\n"
+    
+    # Add actual document details
+    if collected_documents_data:
+        scratchpad += f"\n{'='*80}\nCollected CVE Documents ({documents_collected} total):\n"
+        for idx, (cve_id, doc) in enumerate(list(collected_documents_data.items())[:15], 1):  # Limit to 15 for token efficiency
+            scratchpad += f"\n{idx}. CVE: {cve_id}\n"
+            scratchpad += f"   Package: {doc.get('package_name', 'N/A')}\n"
+            scratchpad += f"   Ecosystem: {doc.get('ecosystem', 'N/A')}\n"
+            scratchpad += f"   Severity: {doc.get('severity', 'N/A')}\n"
+            scratchpad += f"   CVSS Score: {doc.get('cvss_score', 'N/A')}\n"
+            scratchpad += f"   Vulnerability Type: {doc.get('vulnerability_type', 'N/A')}\n"
+            
+            if doc.get("description"):
+                desc = doc['description']
+                scratchpad += f"   Description: {desc[:300] if len(desc) > 300 else desc}\n"
+
+            if doc.get("advisory_text"):
+                advisory = doc['advisory_text']
+                scratchpad += f"   Advisory: {advisory[:400] if len(advisory) > 400 else advisory}\n"
+        
+        if documents_collected > 15:
+            scratchpad += f"\n... and {documents_collected - 15} more documents\n"
     
     # Build the ReAct format prompt
     prompt = f"""Use the following format:
@@ -339,19 +403,54 @@ Observation: the result of the action
 Thought: reflect on the observations
 ... (this Thought/Action/Observation can repeat N times)
 Thought: I now know the final answer
-Final Answer: the final answer to the original question
+Final Answer: <COMPLETE COMPREHENSIVE ANSWER WITH ALL CITATIONS AND FORMATTING>
 
 Question: {user_question}{scratchpad}
 
-Thought: I need to decide whether to search for more information or provide a final answer.
+{'='*80}
+CRITICAL DECISION POINT - Iteration {iteration}:
 
-DECISION CRITERIA (check against current data collected):
-1. If you have aggregation/statistics data ({aggregations_collected} fields collected) → Think "I now know the final answer" and provide it
-2. If you have 3+ relevant documents ({documents_collected} documents collected) → Think "I now know the final answer" and provide it
-3. If you've tried 3+ different searches → Think "I now know the final answer" and provide it (even if just 1-2 docs)
-4. If a broad search ("*") returned 0 results → Think "I now know the final answer" (data doesn't exist, explain why)
-5. If you have 1-2 documents that directly answer the question → Think "I now know the final answer" and answer it
-6. CRITICAL: Do NOT search indefinitely. If unsure after 2+ iterations, provide answer based on what you have.
+You have collected:
+- {documents_collected} CVE documents
+- {aggregations_collected} aggregation fields
+- {len(previous_searches)} searches completed
 
-Next step:"""
+{("🛑 THIS IS YOUR FINAL ITERATION - YOU MUST PROVIDE 'Final Answer:' WITH A COMPLETE ANSWER NOW") if is_final_iteration else ""}
+
+MANDATORY RULES:
+1. If you have enough information to answer → YOU MUST provide "Final Answer:"
+2. If you have 1+ documents with advisory content → YOU MUST provide "Final Answer:"
+3. If you have aggregation data → YOU MUST provide "Final Answer:"
+4. DO NOT search again if you already have relevant data
+5. DO NOT repeat a search you already performed (check search history above)
+6. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
+{("⚠️ THIS IS YOUR FINAL ITERATION - YOU CANNOT SEARCH ANYMORE. PROVIDE FINAL ANSWER WITH YOUR BEST SYNTHESIS OF COLLECTED DATA.") if is_final_iteration else ""}
+
+⚠️ WARNING: You already searched {len(previous_searches)} time(s). DO NOT repeat identical searches!
+Review the search history above - if your next search would be identical or very similar, provide Final Answer instead.
+
+DECISION CRITERIA:
+✅ Have aggregation data? → "Final Answer: <complete answer>"
+✅ Have several documents? → "Final Answer: <complete answer>"
+✅ Previous searches returned 0 results? → "Final Answer: <explanation>"
+
+⚠️ CRITICAL FORMAT REQUIREMENT:
+Your response MUST be ONE of these two options:
+  OPTION 1: A function call to search_vulnerabilities() - only if you genuinely need more data
+  OPTION 2: "Final Answer: <YOUR COMPLETE ANSWER HERE>" - provide the full answer immediately
+
+❌ DO NOT respond with anything else
+❌ DO NOT include "Thought:", "Action:", or any other text
+❌ DO NOT say "I'll provide the answer" or "Let me search" - just DO IT
+❌ DO NOT write "Final Answer:" without the complete answer text following it
+
+IF YOU PROVIDE FINAL ANSWER:
+- Start with "Final Answer:" prefix (case-insensitive, but "Final Answer:" is preferred)
+- Generate the COMPLETE, COMPREHENSIVE answer immediately after the prefix
+- Include ALL elements: CVE IDs, CVSS scores, packages, ecosystems, versions, code examples, remediation steps
+- Use markdown formatting (headers ##, bullets, code blocks)
+- End with grounding statement: "Source: X CVE records from the vulnerability database"
+- DO NOT respond with ReAct format ("Thought:", "Action:") - provide the FINAL ANSWER NOW
+
+Next step (MUST be either function call OR "Final Answer: <complete answer>"):"""
     return prompt
