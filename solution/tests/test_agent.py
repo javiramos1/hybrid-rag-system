@@ -15,14 +15,21 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from agent import VulnerabilityAgent, ChatMessage, IterationState
+from config import Config
 from search_tool import SearchResult
 from prompts import get_search_tool_declaration, get_system_instruction
 
 
 @pytest.fixture
-def agent():
+def config():
+    """Create config instance for tests."""
+    return Config.from_env()
+
+
+@pytest.fixture
+def agent(config):
     """Create agent instance for tests."""
-    return VulnerabilityAgent()
+    return VulnerabilityAgent(config)
 
 
 # Skip all tests if API key not set
@@ -35,17 +42,17 @@ pytestmark = pytest.mark.skipif(
 class TestVulnerabilityAgent:
     """Test agent functionality."""
 
-    def test_agent_initialization(self):
+    def test_agent_initialization(self, config):
         """Test agent can be initialized with API key."""
-        agent = VulnerabilityAgent()
-        assert agent.model is not None
+        agent = VulnerabilityAgent(config)
+        assert agent.config is not None
         assert agent.search_tool is not None
 
     def test_agent_missing_api_key(self, monkeypatch):
         """Test agent raises error without API key."""
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
-            VulnerabilityAgent()
+            Config.from_env()
 
     def test_search_declaration_structure(self, agent):
         """Test function declaration is properly structured."""
@@ -70,15 +77,28 @@ class TestVulnerabilityAgent:
 class TestReActPattern:
     """Test ReAct (Reasoning + Acting) pattern implementation."""
 
-    def test_agent_initialization_with_max_iterations(self):
+    def test_agent_initialization_with_max_iterations(self, config):
         """Test agent can be initialized with custom max_iterations."""
-        agent = VulnerabilityAgent(max_iterations=3)
-        assert agent.max_iterations == 3
+        # Create a config with custom max_iterations
+        modified_config = Config(
+            google_api_key=config.google_api_key,
+            gemini_model=config.gemini_model,
+            typesense_host=config.typesense_host,
+            typesense_port=config.typesense_port,
+            typesense_api_key=config.typesense_api_key,
+            max_react_iterations=3,
+            max_retries=config.max_retries,
+            max_chat_history=config.max_chat_history,
+            vector_search_k=config.vector_search_k,
+            embedding_model=config.embedding_model,
+        )
+        agent = VulnerabilityAgent(modified_config)
+        assert agent.config.max_react_iterations == 3
 
-    def test_default_max_iterations(self):
+    def test_default_max_iterations(self, config):
         """Test agent defaults to 6 max iterations."""
-        agent = VulnerabilityAgent()
-        assert agent.max_iterations == 6
+        agent = VulnerabilityAgent(config)
+        assert agent.config.max_react_iterations == 6
 
     def test_extract_function_call_present(self, agent):
         """Test extracting function call from response when present."""
@@ -180,21 +200,34 @@ class TestReActPattern:
 class TestChatHistory:
     """Test chat history tracking functionality."""
 
-    def test_agent_initializes_empty_chat_history(self):
+    def test_agent_initializes_empty_chat_history(self, config):
         """Test agent starts with empty chat history."""
-        agent = VulnerabilityAgent()
+        agent = VulnerabilityAgent(config)
         assert agent.chat_history == []
         assert isinstance(agent.chat_history, list)
 
-    def test_agent_default_max_chat_history(self):
+    def test_agent_default_max_chat_history(self, config):
         """Test agent defaults to MAX_CHAT_HISTORY=3."""
-        agent = VulnerabilityAgent()
-        assert agent.max_chat_history == 3
+        agent = VulnerabilityAgent(config)
+        assert agent.config.max_chat_history == 3
 
-    def test_agent_custom_max_chat_history(self):
+    def test_agent_custom_max_chat_history(self, config):
         """Test agent accepts custom max_chat_history."""
-        agent = VulnerabilityAgent(max_chat_history=5)
-        assert agent.max_chat_history == 5
+        # Create a config with custom max_chat_history
+        modified_config = Config(
+            google_api_key=config.google_api_key,
+            gemini_model=config.gemini_model,
+            typesense_host=config.typesense_host,
+            typesense_port=config.typesense_port,
+            typesense_api_key=config.typesense_api_key,
+            max_react_iterations=config.max_react_iterations,
+            max_retries=config.max_retries,
+            max_chat_history=5,
+            vector_search_k=config.vector_search_k,
+            embedding_model=config.embedding_model,
+        )
+        agent = VulnerabilityAgent(modified_config)
+        assert agent.config.max_chat_history == 5
 
     def test_agent_reads_max_chat_history_from_env(self, monkeypatch):
         """Test agent reads MAX_CHAT_HISTORY from environment variable."""
@@ -202,8 +235,10 @@ class TestChatHistory:
         monkeypatch.delenv("MAX_CHAT_HISTORY", raising=False)
         # Set the env var to test
         monkeypatch.setenv("MAX_CHAT_HISTORY", "7")
-        agent = VulnerabilityAgent()
-        assert agent.max_chat_history == 7
+        # Create config that will read from env
+        config = Config.from_env()
+        agent = VulnerabilityAgent(config)
+        assert agent.config.max_chat_history == 7
 
     def test_chat_message_creation(self):
         """Test ChatMessage dataclass."""
@@ -280,9 +315,9 @@ class TestChatHistory:
         # Should have truncation indicator
         assert "..." in instruction or len(instruction) < len(long_answer)
 
-    def test_chat_history_maintains_order(self):
+    def test_chat_history_maintains_order(self, config):
         """Test chat history maintains insertion order."""
-        agent = VulnerabilityAgent()
+        agent = VulnerabilityAgent(config)
         
         # Simulate adding messages
         for i in range(1, 4):
@@ -297,9 +332,22 @@ class TestChatHistory:
         assert agent.chat_history[1].user_question == "Question 2"
         assert agent.chat_history[2].user_question == "Question 3"
 
-    def test_chat_history_respects_max_size(self):
+    def test_chat_history_respects_max_size(self, config):
         """Test chat history removes old messages when exceeding max."""
-        agent = VulnerabilityAgent(max_chat_history=2)
+        # Create a config with custom max_chat_history
+        modified_config = Config(
+            google_api_key=config.google_api_key,
+            gemini_model=config.gemini_model,
+            typesense_host=config.typesense_host,
+            typesense_port=config.typesense_port,
+            typesense_api_key=config.typesense_api_key,
+            max_react_iterations=config.max_react_iterations,
+            max_retries=config.max_retries,
+            max_chat_history=2,
+            vector_search_k=config.vector_search_k,
+            embedding_model=config.embedding_model,
+        )
+        agent = VulnerabilityAgent(modified_config)
         
         # Add 4 messages
         for i in range(1, 5):
@@ -309,17 +357,30 @@ class TestChatHistory:
             ))
             
             # Simulate the truncation logic from answer_question()
-            if len(agent.chat_history) > agent.max_chat_history:
-                agent.chat_history = agent.chat_history[-agent.max_chat_history:]
+            if len(agent.chat_history) > agent.config.max_chat_history:
+                agent.chat_history = agent.chat_history[-agent.config.max_chat_history:]
         
         # Should only have last 2 messages
         assert len(agent.chat_history) == 2
         assert agent.chat_history[0].user_question == "Question 3"
         assert agent.chat_history[1].user_question == "Question 4"
 
-    def test_chat_history_with_max_chat_history_three(self):
+    def test_chat_history_with_max_chat_history_three(self, config):
         """Test chat history correctly manages 3 messages (default)."""
-        agent = VulnerabilityAgent(max_chat_history=3)
+        # Create a config with custom max_chat_history
+        modified_config = Config(
+            google_api_key=config.google_api_key,
+            gemini_model=config.gemini_model,
+            typesense_host=config.typesense_host,
+            typesense_port=config.typesense_port,
+            typesense_api_key=config.typesense_api_key,
+            max_react_iterations=config.max_react_iterations,
+            max_retries=config.max_retries,
+            max_chat_history=3,
+            vector_search_k=config.vector_search_k,
+            embedding_model=config.embedding_model,
+        )
+        agent = VulnerabilityAgent(modified_config)
         
         # Add 5 messages
         messages = [
@@ -336,8 +397,8 @@ class TestChatHistory:
                 final_answer=answer
             ))
             
-            if len(agent.chat_history) > agent.max_chat_history:
-                agent.chat_history = agent.chat_history[-agent.max_chat_history:]
+            if len(agent.chat_history) > agent.config.max_chat_history:
+                agent.chat_history = agent.chat_history[-agent.config.max_chat_history:]
         
         # Should only have last 3 messages: messages[2], messages[3], messages[4]
         assert len(agent.chat_history) == 3

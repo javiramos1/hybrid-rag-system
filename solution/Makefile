@@ -156,12 +156,20 @@ ingest: docker-up ## Run data ingestion pipeline
 		echo "$(RED)✗ src/ingest.py not found$(NC)"; \
 		exit 1; \
 	fi
-	@$(VENV_PYTHON) src/ingest.py
+	@if [ -f .env ]; then \
+		. ./.env; \
+		export GOOGLE_API_KEY TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
+	fi; \
+	$(VENV_PYTHON) src/ingest.py
 	@echo "$(GREEN)✓ Data ingestion complete$(NC)"
 
 run: docker-up ## Run interactive CLI
 	@echo "$(BLUE)Starting interactive CLI...$(NC)"
-	@$(VENV_PYTHON) main.py
+	@if [ -f .env ]; then \
+		. ./.env; \
+		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
+	fi; \
+	$(VENV_PYTHON) main.py
 
 query: docker-up ## Run single query (usage: make query Q='your question')
 	@if [ -z "$(Q)" ]; then \
@@ -170,7 +178,11 @@ query: docker-up ## Run single query (usage: make query Q='your question')
 		exit 1; \
 	fi
 	@echo "$(BLUE)Running query: $(Q)$(NC)"
-	@$(VENV_PYTHON) main.py "$(Q)"
+	@if [ -f .env ]; then \
+		. ./.env; \
+		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
+	fi; \
+	$(VENV_PYTHON) main.py "$(Q)"
 
 ## Documentation
 

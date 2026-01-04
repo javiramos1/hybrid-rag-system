@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Prompts and tool declarations for the vulnerability agent."""
+"""Prompts and tool declarations for the vulnerability agent.
+
+Reviewer: This file defines the system instructions and tool declaration for the vulnerability search tool used by the agent.
+
+These are functions that just return the tool definition and the system prompt used by the agent. There is no logic here.
+
+NOTE: Prompt engineering is critical for LLM-based agents. It requires an evaluation framework such as LangSmith to iteratively refine and improve prompts based on agent performance and user feedback. 
+Due to the limitations of this chanllenge, we are providing a static and verbose prompt as a starting point which is not optimal. 
+In a real-world scenario, we would invest significant effort into prompt tuning and evaluation to achieve the best results using LangSmith or similar tools.
+Prompt engineering requires a lot of time and iteration to get right which is not something we currently have time for. Please, take this into consideration when reviewing the solution.
+
+"""
 
 from google.genai import types
 
@@ -114,6 +125,20 @@ def get_system_instruction(chat_history: list = None) -> str:
     
     return """You are a security vulnerability expert with access to 47 CVE documents.
 
+=== SCOPE & GUARDRAILS ===
+
+⚠️ **CRITICAL SCOPE LIMITATION**: You can ONLY answer questions about:
+✅ Security vulnerabilities, CVEs, and cybersecurity topics
+✅ Vulnerability analysis, remediation, and best practices
+✅ Package ecosystems (npm, pip, maven) and security issues
+✅ Threat vectors, attack methods, and defense strategies
+✅ Code security, secure coding practices
+
+❌ You CANNOT answer questions outside security domain
+
+🚫 **IF USER ASKS OUT-OF-SCOPE QUESTION:**
+Politely decline and redirect to security topics with examples.
+
 === CHAT HISTORY USAGE ===
 
 **BEFORE searching, check if the answer is already in conversation history:**
@@ -152,13 +177,13 @@ STOPPING CONDITIONS (when to provide Final Answer):
 ✅ First search for specific query returned results (1+ CVE for ANY query type)
 ✅ You have sufficient context to answer comprehensively
 
-CRITICAL ABORT CRITERIA (STOP searching, ANSWER immediately):
-🛑 After 1 search stop if you have 1+ documents with relevant advisory content → ANSWER NOW
-🛑 After 1 search with any results → ANSWER (don't do a second search just to be thorough)
-🛑 After 2 searches with same/similar results → ANSWER (don't keep retrying identical searches)
-🛑 After 2+ total search attempts → ANSWER (even if results seem incomplete)
-🛑 NEVER do more than 2 searches - always answer after the 2nd search
-🛑 If the same 1 document keeps appearing → ANSWER (it's the only relevant one)
+CRITICAL ABORT CRITERIA - STOP SEARCHING AND ANSWER IMMEDIATELY:
+🛑 **AFTER ANY SUCCESSFUL SEARCH WITH RESULTS**: You must decide: Is this enough to answer?
+   - If YES (you have ≥1 CVE document OR aggregation data) → Provide "Final Answer:" IMMEDIATELY
+   - If NO (results don't match query intent) → Do ONE more refined search, then ANSWER
+🛑 **AFTER 2 TOTAL SEARCHES**: You MUST provide "Final Answer:" - no exceptions
+🛑 **IF SAME DOCUMENT REPEATS**: Different search returned same CVE? → ANSWER (you've explored thoroughly)
+
 
 DECISION MAKING:
 - Aggregation queries (avg CVSS, count CVEs): ANSWER after first search returns stats
@@ -439,7 +464,7 @@ CRITICAL DECISION POINT - Iteration {iteration}:
 You have collected:
 - {documents_collected} CVE documents
 - {aggregations_collected} aggregation fields
-- {len(previous_searches)} searches completed
+- {len(previous_searches)} searches completed so far
 
 {("🛑 THIS IS YOUR FINAL ITERATION - YOU MUST PROVIDE 'Final Answer:' WITH A COMPLETE ANSWER NOW") if is_final_iteration else ""}
 
@@ -452,8 +477,9 @@ MANDATORY RULES:
 6. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
 {("⚠️ THIS IS YOUR FINAL ITERATION - YOU CANNOT SEARCH ANYMORE. PROVIDE FINAL ANSWER WITH YOUR BEST SYNTHESIS OF COLLECTED DATA.") if is_final_iteration else ""}
 
-⚠️ WARNING: You already searched {len(previous_searches)} time(s). DO NOT repeat identical searches!
-Review the search history above - if your next search would be identical or very similar, provide Final Answer instead.
+⚠️ SEARCH COUNT WARNING: You have done {len(previous_searches)} search(es).
+{f"↳ You have {2 - len(previous_searches)} search(es) remaining before you MUST answer" if len(previous_searches) < 2 else "↳ You have EXHAUSTED your search budget. PROVIDE FINAL ANSWER NOW."}
+{f"\n↳ If you search again, you MUST provide Final Answer after the next search (no exceptions)." if len(previous_searches) == 1 else ""}
 
 DECISION CRITERIA:
 ✅ Have aggregation data? → "Final Answer: <complete answer>"

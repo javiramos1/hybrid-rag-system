@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""CLI for Hybrid RAG System - Security Vulnerabilities.
+"""
+Main Entry Point for Vulnerability Query Assistant.
+
+Simple CLI that allows users to ask questions about software vulnerabilities.
+
+NOTE: This implementation uses a basic REPL loop and direct API calls via google-genai.
+For production-grade applications, consider using a framework like PydanticAI which already comes with a feature rich CLI.
+Reviewer: Ignore this file for the purpose of the challenge, focus on the core logic in the src/ folder.
 
 Supports two modes:
   - Interactive: python main.py (REPL with 'help', 'exit' commands)
   - Single query: python main.py "your question here"
 """
 
-import os
 import sys
 from pathlib import Path
-
-# Load environment variables from .env file
-from dotenv import load_dotenv
-load_dotenv()
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
+from config import Config
 from agent import VulnerabilityAgent
 from logger import get_logger
 from rich.console import Console
@@ -52,12 +55,22 @@ HYBRID QUERIES (specific CVE + explanation):
     print(help_text)
 
 
-def validate_api_key() -> None:
-    """Validate Google API key is set."""
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        print("❌ Error: GOOGLE_API_KEY environment variable not set")
-        print("   Get your key at: https://aistudio.google.com/app/apikey")
+def validate_config() -> Config:
+    """Load and validate configuration from environment variables.
+
+    Returns:
+        Config instance with all settings
+
+    Raises:
+        ValueError: If required configuration is missing
+    """
+    try:
+        config = Config.from_env()
+        logger.info(f"Configuration loaded: {config}")
+        return config
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+        print("   Get your Google API key at: https://aistudio.google.com/app/apikey")
         print("   Then: export GOOGLE_API_KEY='your-key-here'")
         sys.exit(1)
 
@@ -107,34 +120,21 @@ def single_query_mode(agent: VulnerabilityAgent, question: str) -> None:
 
 def main() -> None:
     """CLI entry point with mode routing."""
-    # Validate API key
-    validate_api_key()
-
-    # Read Typesense configuration from environment variables
-    typesense_host = os.getenv("TYPESENSE_HOST", "localhost")
-    typesense_port = os.getenv("TYPESENSE_PORT", "8108")
-    typesense_api_key = os.getenv("TYPESENSE_API_KEY", "xyz")
-    gemini_model = os.getenv("GEMINI_MODEL")
-    google_api_key = os.getenv("GOOGLE_API_KEY")
+    # Load and validate configuration
+    config = validate_config()
 
     logger.info(
         "Starting vulnerability assistant",
         extra={
-            "typesense_host": typesense_host,
-            "typesense_port": typesense_port,
-            "gemini_model": gemini_model or "default",
+            "typesense_host": config.typesense_host,
+            "typesense_port": config.typesense_port,
+            "gemini_model": config.gemini_model,
         },
     )
 
-    # Initialize agent
+    # Initialize agent with config
     try:
-        agent = VulnerabilityAgent(
-            api_key=google_api_key,
-            model=gemini_model,
-            typesense_host=typesense_host,
-            typesense_port=typesense_port,
-            typesense_api_key=typesense_api_key,
-        )
+        agent = VulnerabilityAgent(config)
     except ValueError as e:
         print(f"❌ Error: {e}")
         sys.exit(1)

@@ -1,42 +1,65 @@
 #!/usr/bin/env python3
-"""Data ingestion pipeline for vulnerability RAG system."""
+"""Stand alone data ingestion pipeline: Load CSVs, merge with advisories, generate embeddings, index to Typesense.
 
-import os
+Pipeline Overview:
+  1. Load 4 CSVs: vulnerabilities, packages, vulnerability_types, severity_levels
+  2. Denormalize into single "one doc per CVE" structure (47 CVEs total)
+  3. Parse 8 advisory markdown files with section-aware chunking
+  4. Generate embeddings for CSV descriptions + advisory chunks (384-dim vectors)
+  5. Create Typesense collection with nested schema (CVE doc contains advisory_chunks array)
+  6. Import 47 CVE documents with nested chunks into Typesense
+
+We use Polars for fast CSV loading and joins, SentenceTransformers for embeddings, and
+Typesense for vector search with nested objects.
+
+Schema Design (CVE-Centric):
+  - Each CVE is one top-level document with fields: cve_id, package_name, ecosystem,
+    vulnerability_type, severity, cvss_score, affected_versions, fixed_version, content,
+    embedding, has_advisory (bool flag)
+  - Nested advisory_chunks: array of {content, section, is_code, index, embedding}
+  - This design keeps analytics clean (47 docs, not 95+) while enabling rich search
+    across both metadata and advisory content
+
+Chunking Strategy (Section-Aware):
+  - Split advisories by ## markdown headers (natural semantic boundaries)
+  - Preserve entire code blocks intact (never split mid-code)
+  - Split text-only sections at sentence boundaries (~500 chars per chunk)
+  - Each chunk tagged with section type (summary, remediation, code_example, etc.)
+  - Result: ~60-80 advisory chunks total, each with separate embedding
+"""
+
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
 import polars as pl
 import typesense
 from sentence_transformers import SentenceTransformer
 
+from config import Config
 from logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class IngestionConfig:
-    """Configuration for ingestion pipeline."""
-
-    task_dir: Path = Path(os.getenv("INGESTION_TASK_DIR", "../task"))
-    embedding_model: str = os.getenv(
-        "INGESTION_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
-    )
-    typesense_host: str = os.getenv("INGESTION_TYPESENSE_HOST", "localhost")
-    typesense_port: str = os.getenv("INGESTION_TYPESENSE_PORT", "8108")
-    typesense_api_key: str = os.getenv("INGESTION_TYPESENSE_API_KEY", "xyz")
-    chunk_max_chars: int = int(os.getenv("INGESTION_CHUNK_MAX_CHARS", "500"))
-
-
-def load_csv_data(config: IngestionConfig) -> pl.DataFrame:
-    """Load and denormalize CSV data using SQL-like joins."""
+def load_csv_data(task_dir: Path) -> pl.DataFrame:
+    """Load and denormalize CSV data using SQL-like joins.
+    
+    Uses Polars for faster CSV loading and joins compared to pandas.
+    Joins 4 normalized tables into single flat structure:
+      vulnerabilities → packages (package details)
+                     → vulnerability_types (XSS, SQL Injection, etc.)
+                     → severity_levels (Critical, High, etc.)
+        This strategy is recommend for search engines to avoid complex joins at query time. 
+        Search engines prefer unnormalized flat documents for efficiency.
+    
+    Returns 47 rows (one per CVE) with all normalized fields flattened.
+    """
     logger.info("Loading CSV files...")
 
-    vulnerabilities = pl.read_csv(config.task_dir / "vulnerabilities.csv")
-    packages = pl.read_csv(config.task_dir / "packages.csv")
-    vulnerability_types = pl.read_csv(config.task_dir / "vulnerability_types.csv")
-    severity_levels = pl.read_csv(config.task_dir / "severity_levels.csv")
+    vulnerabilities = pl.read_csv(task_dir / "vulnerabilities.csv")
+    packages = pl.read_csv(task_dir / "packages.csv")
+    vulnerability_types = pl.read_csv(task_dir / "vulnerability_types.csv")
+    severity_levels = pl.read_csv(task_dir / "severity_levels.csv")
 
     logger.info("Denormalizing data with joins...")
     full_data = (
@@ -75,16 +98,20 @@ def load_csv_data(config: IngestionConfig) -> pl.DataFrame:
     return full_data
 
 
-def parse_advisories(config: IngestionConfig) -> list[dict]:
+def parse_advisories(task_dir: Path) -> list[dict]:
     """Parse advisory markdown files with section-aware chunking strategy.
 
-    Strategy: Split by section headers (##) and preserve code blocks intact.
-    This maintains context for code examples and remediation steps.
-
-    Returns:
-        List of chunk dictionaries with metadata, content, section type, and code flag
+    For each advisory (8 total):
+      1. Extract CVE ID and metadata from header
+      2. Split by ## section headers (semantic boundaries: Summary, Remediation, Code Examples, etc.)
+      3. For sections with code blocks (```): keep entire section intact (never split mid-code)
+      4. For text-only sections: split at sentence boundaries (~500 chars per chunk)
+      5. Tag each chunk with section type (summary, remediation, code_example, attack, cvss, details)
+    
+    Returns list of ~60-80 chunk dicts {cve_id, content, section, is_code, package_name, ...}
+    Each chunk will be embedded separately for semantic search.
     """
-    advisories_dir = config.task_dir / "advisories"
+    advisories_dir = task_dir / "advisories"
     all_chunks = []
 
     for filepath in sorted(advisories_dir.glob("*.md")):
@@ -129,7 +156,7 @@ def parse_advisories(config: IngestionConfig) -> list[dict]:
                 )
             else:
                 # Split text content into ~500 char chunks at sentence boundaries
-                text_chunks = _split_text(section_content, max_chars=config.chunk_max_chars)
+                text_chunks = _split_text(section_content, max_chars=500)
                 for chunk_text in text_chunks:
                     chunk = {
                         **metadata,
@@ -152,7 +179,23 @@ def parse_advisories(config: IngestionConfig) -> list[dict]:
 
 
 def _extract_metadata(content: str) -> dict:
-    """Extract metadata from advisory header."""
+    """Extract metadata from advisory header for structured filtering and analytics.
+    
+    Extracts key metadata fields (CVE ID, package name, ecosystem, severity, CVSS score)
+    from the advisory markdown header. This is a critical advantage of hybrid search engines
+    like Typesense over pure vector databases:
+    
+    - Vector DBs: Can only search semantic similarity, no structured filtering
+    - Search Engines: Enable faceting, aggregations, and range queries on metadata
+    
+    With extracted metadata, we can:
+      - Filter by ecosystem (npm/pip/maven), severity level, CVSS score range
+      - Generate analytics: avg CVSS by ecosystem, vulnerability type distribution, etc.
+      - Combine keyword + vector search with structured filters for precise retrieval
+    
+    This enables sophisticated queries like "Critical npm vulnerabilities + explain fix" 
+    which require both semantic understanding AND structured filtering.
+    """
     metadata = {}
     for line in content.split("\n")[:20]:
         if "**CVE ID:**" in line:
@@ -173,7 +216,16 @@ def _extract_metadata(content: str) -> dict:
 
 
 def _categorize_section(title: str) -> str:
-    """Categorize section by keywords."""
+    """Categorize advisory section by keywords for faceted search and analytics.
+    
+    Maps markdown section headers to semantic categories, enabling:
+      - Faceted search: Find all "remediation" or "code_example" sections across CVEs
+      - Analytics: Count vulnerability types by section (how many have code examples?)
+      - Targeted retrieval: "Show me attack vectors" retrieves only attack sections
+    
+    This is another advantage of structured search engines: query results can be
+    filtered and aggregated by semantic type, not just keyword or vector similarity.
+    """
     title_lower = title.lower()
     if "summary" in title_lower or "overview" in title_lower:
         return "summary"
@@ -191,15 +243,12 @@ def _categorize_section(title: str) -> str:
 def _split_text(text: str, max_chars: int = 500) -> list[str]:
     """Split text into chunks at sentence boundaries (~max_chars each).
 
-    Uses simple sentence splitting (good enough for technical documentation).
-    Preserves sentence context and avoids splitting mid-sentence.
-
-    Args:
-        text: Text to split
-        max_chars: Maximum characters per chunk
-
-    Returns:
-        List of text chunks split at sentence boundaries
+    Why sentence boundaries?
+      - Preserves context (related sentences stay together)
+      - Avoids cutting mid-sentence (better for embeddings)
+      - Simple and effective for technical docs
+    
+    Returns list of ~150-200 token chunks (sentence count varies by length).
     """
     # Simple sentence split on period, exclamation, question mark
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -225,22 +274,6 @@ def _split_text(text: str, max_chars: int = 500) -> list[str]:
     return chunks
 
 
-def _truncate_text(text: str, max_chars: int = 10000) -> str:
-    """Truncate text to max_chars while preserving sentence boundaries."""
-    if len(text) <= max_chars:
-        return text
-
-    # Truncate and find last sentence boundary
-    truncated = text[:max_chars]
-    last_period = truncated.rfind(".")
-    last_newline = truncated.rfind("\n")
-
-    cutoff = max(last_period, last_newline)
-    if cutoff > 0:
-        return truncated[: cutoff + 1]
-    return truncated
-
-
 def generate_embeddings(texts: list[str], model: SentenceTransformer) -> list[list[float]]:
     """Generate embeddings for texts."""
     logger.info(f"Generating embeddings for {len(texts)} texts...")
@@ -249,7 +282,17 @@ def generate_embeddings(texts: list[str], model: SentenceTransformer) -> list[li
 
 
 def create_typesense_collection(client: typesense.Client) -> None:
-    """Create Typesense collection schema with nested advisory chunks (one CVE doc per vulnerability)."""
+    """Create Typesense collection schema with nested advisory chunks.
+    
+    One document per CVE (47 total). Each CVE doc has:
+      - Top-level fields: cve_id, package_name, ecosystem, severity, cvss_score, etc.
+      - CSV embedding: vector for BM25+semantic hybrid search on description
+      - has_advisory: boolean flag (8 CVEs have advisories, 39 don't)
+      - advisory_chunks: nested array of {content, section, is_code, index, embedding}
+    
+    Nested chunks enable rich search: find CVEs by advisory section (remediation, code_example, etc.)
+    without creating 95 top-level documents. Analytics report 47 CVEs, not 95.
+    """
     logger.info("Creating Typesense collection...")
 
     schema = {
@@ -311,15 +354,14 @@ def import_documents(
 ) -> None:
     """Import documents to Typesense with nested advisory chunks.
 
-    Structure (maintains 1 document per CVE):
-    - 47 top-level documents (one per CVE)
-    - Each CVE document contains nested advisory_chunks array
-    - Advisory chunks are sub-documents with embeddings
-
-    Benefits:
-    - Analytics report 47 vulnerabilities (not 95)
-    - Search spans both CVE metadata and advisory content
-    - Chunk embeddings enable semantic search within advisories
+    Process:
+      1. Group advisory chunks by CVE ID (8 CVEs have advisories)
+      2. For each CVE: create doc with metadata + nested advisory_chunks array
+      3. Each nested chunk has its own embedding (for semantic search within advisories)
+      4. Batch import all 47 CVE docs (with ~60-80 nested chunks total)
+    
+    Result: Hybrid search spans CVE metadata (BM25) + advisory content (semantic)
+    Analytics: 47 documents, not 95+ (clean reporting)
     """
     logger.info("Preparing documents with nested chunks...")
 
@@ -386,18 +428,27 @@ def import_documents(
 
 
 def main() -> None:
-    """Run the ingestion pipeline with section-based chunking strategy."""
-    config = IngestionConfig()
+    """Run full ingestion pipeline: CSV → merge advisories → embed → index.
+    
+    Steps:
+      1. Load embedding model (384-dim all-MiniLM-L6-v2)
+      2. Load and denormalize 4 CSVs (47 vulnerabilities)
+      3. Parse 8 advisories with section-based chunking (~60-80 chunks)
+      4. Encode all texts to embeddings (CSV descriptions + advisory chunks)
+      5. Create Typesense collection with nested schema
+      6. Import 47 CVE documents with nested advisory chunks
+    """
+    config = Config.from_env()
 
     # Load embedding model
     logger.info(f"Loading embedding model: {config.embedding_model}")
     embedding_model = SentenceTransformer(config.embedding_model)
 
     # Load and denormalize CSV data
-    csv_data = load_csv_data(config)
+    csv_data = load_csv_data(config.task_dir)
 
     # Parse advisories with section-based chunking (NEW STRATEGY)
-    advisory_chunks = parse_advisories(config)
+    advisory_chunks = parse_advisories(config.task_dir)
 
     # Generate embeddings for all texts
     logger.info("Preparing texts for embedding generation...")
@@ -419,7 +470,7 @@ def main() -> None:
     csv_embeddings = [emb.tolist() for emb in embeddings[: len(csv_texts)]]
     advisory_embeddings = [emb.tolist() for emb in embeddings[len(csv_texts) :]]
 
-    # Connect to Typesense
+    # Connect to Typesense, in Production we will use timeouts and retries
     logger.info("Connecting to Typesense...")
     client = typesense.Client(
         {

@@ -2,25 +2,32 @@
 """LLM agent with ReAct pattern for intelligent vulnerability query answering.
 
 DESIGN NOTES:
-- Implements ReAct (Reasoning + Acting) pattern for multi-iteration search and synthesis
+- Implements basic ReAct (Reasoning + Acting) pattern for multi-iteration search and synthesis
+- Includes basic chat history and conversation memory for multi-turn interactions
 - Uses low-level google-genai library for direct API control (per requirement to avoid
-  high-level RAG frameworks like LangChain, LlamaIndex, PydanticAI, etc.)
-- Trade-offs: No conversation memory, limited function call error handling, and manual
-  response parsing. High-level frameworks would provide automatic retries, validation,
-  and state management, but implementing core logic from scratch was a requirement.
-- Result: More verbose code with explicit 3-step flow (initial query → search execution →
-  answer synthesis) rather than automatic orchestration.
-- Simple, human-readable code: decision logic is explicit, not hidden in framework magic
-- Iteration tracking: agent knows when to search again vs. when to answer
+  high-level RAG frameworks like LangChain, LlamaIndex, PydanticAI, etc. during challenge)
+- ⚠️ PRODUCTION NOTE: This is a basic implementation. For production environments, use
+  established frameworks (LangChain, PydanticAI, etc.) which provide:
+  - Robust error handling and automatic retries with exponential backoff
+  - Built-in state management and conversation memory optimization
+  - Sophisticated function calling orchestration and validation
+  - Production-grade observability and debugging tools
+  - Optimized memory and context window management
+  - Multi-step agent planning and reflection loops
+- Current Trade-offs (intentional for learning): Limited error handling, manual response 
+  parsing, verbose explicit logic flow. This makes decision logic transparent but less 
+  maintainable at scale. It also makes the code harder to follow compared to using a
+  high-level framework.
+- Iteration tracking: Agent knows when to search again vs. when to answer
 """
 
-import os
 from typing import Optional, List
 from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
 
+from config import Config
 from logger import get_logger
 from search_tool import VulnerabilitySearchTool
 from utils import retry_with_backoff
@@ -61,47 +68,18 @@ class IterationState:
 class VulnerabilityAgent:
     """Query agent using ReAct pattern with Gemini function calling."""
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        max_iterations: Optional[int] = None,
-        max_retries: Optional[int] = None,
-        max_chat_history: Optional[int] = None,
-        typesense_host: str = "localhost",
-        typesense_port: str = "8108",
-        typesense_api_key: str = "xyz",
-    ):
+    def __init__(self, config: Config):
         """Initialize agent with ReAct capabilities.
 
         Args:
-            api_key: Google API key (defaults to GOOGLE_API_KEY env var)
-            model: Gemini model (defaults to GEMINI_MODEL env var)
-            max_iterations: Max ReAct iterations (defaults to MAX_REACT_ITERATIONS env var, fallback 6)
-            max_retries: Max retries on API errors (defaults to MAX_RETRIES env var, fallback 2)
-            max_chat_history: Max chat history messages to keep (defaults to MAX_CHAT_HISTORY env var, fallback 3)
-            typesense_host: Typesense server host
-            typesense_port: Typesense server port
-            typesense_api_key: Typesense API key
+            config: Config instance with all settings (API keys, model names, etc.)
         """
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable not set")
-
-        self.model = model or os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
-        self.max_iterations = max_iterations if max_iterations is not None else int(os.getenv("MAX_REACT_ITERATIONS", "6"))
-        self.max_retries = max_retries if max_retries is not None else int(os.getenv("MAX_RETRIES", "2"))
-        self.max_chat_history = max_chat_history if max_chat_history is not None else int(os.getenv("MAX_CHAT_HISTORY", "3"))
+        self.config = config
         self.chat_history: List[ChatMessage] = []
 
-        self.client = genai.Client(api_key=self.api_key)
-        self.search_tool = VulnerabilitySearchTool(
-            typesense_host, typesense_port, typesense_api_key
-        )
-        logger.info(
-            f"Initialized agent: model={self.model}, max_iterations={self.max_iterations}, "
-            f"max_retries={self.max_retries}, max_chat_history={self.max_chat_history}"
-        )
+        self.client = genai.Client(api_key=config.google_api_key)
+        self.search_tool = VulnerabilitySearchTool(config)
+        logger.info(f"Initialized agent: {config}")
 
     def answer_question(self, user_question: str) -> str:
         """Answer user question using ReAct pattern (Reasoning + Acting).
@@ -137,15 +115,15 @@ class VulnerabilityAgent:
         system_instruction = get_system_instruction(chat_history=self.chat_history)
 
         # Main ReAct loop
-        while state.iteration < self.max_iterations:
+        while state.iteration < self.config.max_react_iterations:
             state.iteration += 1
-            logger.info(f"\n>>> Iteration {state.iteration}/{self.max_iterations}")
+            logger.info(f"\n>>> Iteration {state.iteration}/{self.config.max_react_iterations}")
 
             # Build prompt: first iteration uses question directly, later use full history
             if state.iteration == 1:
                 prompt_content = user_question
             else:
-                is_final_iteration = state.iteration >= self.max_iterations
+                is_final_iteration = state.iteration >= self.config.max_react_iterations
                 prompt_content = get_react_iteration_prompt(
                     user_question, 
                     state.iteration, 
@@ -158,7 +136,7 @@ class VulnerabilityAgent:
             # Ask LLM what to do next (search or answer)
             response = retry_with_backoff(
                 lambda: self.client.models.generate_content(
-                    model=self.model,
+                    model=self.config.gemini_model,
                     contents=prompt_content,
                     config=types.GenerateContentConfig(
                         tools=[tool],
@@ -166,7 +144,7 @@ class VulnerabilityAgent:
                         temperature=0.1,
                     ),
                 ),
-                max_retries=self.max_retries,
+                max_retries=self.config.max_retries,
                 extra_prompt="Decide whether to search again or provide final answer.",
             )
 
@@ -182,8 +160,8 @@ class VulnerabilityAgent:
                 if should_break:
                     break
 
-        if state.iteration >= self.max_iterations:
-            logger.warning(f"Reached max iterations ({self.max_iterations})")
+        if state.iteration >= self.config.max_react_iterations:
+            logger.warning(f"Reached max iterations ({self.config.max_react_iterations})")
             if not state.final_answer:
                 state.final_answer = "Sorry, we could not generate an answer. Please try a different question or refine your query."
 
@@ -196,12 +174,11 @@ class VulnerabilityAgent:
         ))
         
         # Keep only the last max_chat_history messages
-        if len(self.chat_history) > self.max_chat_history:
-            self.chat_history = self.chat_history[-self.max_chat_history:]
+        if len(self.chat_history) > self.config.max_chat_history:
+            self.chat_history = self.chat_history[-self.config.max_chat_history:]
         
-        logger.info(f"Chat history size: {len(self.chat_history)}/{self.max_chat_history}")
-        logger.info(f"\n✅ Final answer ({len(result)} chars)")
-        logger.info("=" * 80 + "\n")
+        logger.info(f"Chat history size: {len(self.chat_history)}/{self.config.max_chat_history}")
+        logger.info(f"\n✅ Final answer ({len(result)} chars)\n")
         return result
 
     def _execute_search_and_collect(self, function_call, state: IterationState) -> None:

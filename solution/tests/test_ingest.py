@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ingest import (
     _extract_metadata,
-    _truncate_text,
     load_csv_data,
     parse_advisories,
 )
@@ -32,25 +31,6 @@ def test_extract_metadata():
     assert metadata["severity"] == "High"
     assert metadata["cvss_score"] == 7.5
     print("✓ Metadata extraction works")
-
-
-def test_truncate_text():
-    """Test text truncation at sentence boundaries."""
-    text = "First sentence. Second sentence. Third sentence. Fourth sentence."
-
-    # Truncate to 30 chars - should cut at sentence boundary
-    truncated = _truncate_text(text, max_chars=30)
-    assert truncated == "First sentence."
-    assert len(truncated) <= 30
-    print("✓ Text truncation works")
-
-
-def test_truncate_text_no_truncation():
-    """Test text truncation when text is shorter than max."""
-    text = "Short text."
-    truncated = _truncate_text(text, max_chars=100)
-    assert truncated == text
-    print("✓ Text truncation (no-op) works")
 
 
 def test_load_csv_data():
@@ -78,11 +58,8 @@ def test_load_csv_data():
             "severity_id,severity_name,min_cvss,max_cvss\n1,High,7.0,8.9\n"
         )
 
-        # Mock config
-        from src.ingest import IngestionConfig
-
-        config = IngestionConfig(task_dir=tmppath)
-        data = load_csv_data(config)
+        # Load CSV data without config
+        data = load_csv_data(tmppath)
 
         assert len(data) == 1
         assert data[0, "cve_id"] == "CVE-2024-1234"
@@ -145,10 +122,7 @@ SQL injection vulnerabilities can be exploited.
         (advisory_dir / "advisory-002.md").write_text(advisory2)
 
         # Parse advisories (returns list of chunks)
-        from src.ingest import IngestionConfig
-
-        config = IngestionConfig(task_dir=tmppath)
-        advisory_chunks = parse_advisories(config)
+        advisory_chunks = parse_advisories(tmppath)
 
         # Should have multiple chunks from the advisories
         assert len(advisory_chunks) > 0
@@ -168,8 +142,6 @@ SQL injection vulnerabilities can be exploited.
 
 if __name__ == "__main__":
     test_extract_metadata()
-    test_truncate_text()
-    test_truncate_text_no_truncation()
     test_load_csv_data()
     test_parse_advisories()
     print("\n✅ All ingestion tests passed!")

@@ -9,17 +9,20 @@ import pytest
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from config import Config
 from search_tool import VulnerabilitySearchTool, SearchResult
 
 
 @pytest.fixture
-def search_tool():
+def config():
+    """Create config instance for tests."""
+    return Config.from_env()
+
+
+@pytest.fixture
+def search_tool(config):
     """Initialize search tool connected to running Typesense."""
-    return VulnerabilitySearchTool(
-        typesense_host="localhost",
-        typesense_port="8108",
-        typesense_api_key="xyz",
-    )
+    return VulnerabilitySearchTool(config)
 
 
 class TestKeywordSearch:

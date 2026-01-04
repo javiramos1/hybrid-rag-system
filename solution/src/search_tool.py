@@ -8,13 +8,13 @@ a standardized interface for LLM integration.
 """
 
 import json
-import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
 
 import typesense
 from sentence_transformers import SentenceTransformer
 
+from config import Config
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,41 +35,33 @@ class SearchResult:
 class VulnerabilitySearchTool:
     """Unified search interface for keyword, semantic, and hybrid queries."""
 
-    def __init__(
-        self,
-        typesense_host: str = "localhost",
-        typesense_port: str = "8108",
-        typesense_api_key: str = "xyz",
-        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
-    ):
+    def __init__(self, config: Config):
         """Initialize search tool with Typesense client and embedding model.
 
-        Configuration via environment variables:
-            VECTOR_SEARCH_K: Number of nearest neighbors for vector search (default: 100)
+        Args:
+            config: Config instance with Typesense and embedding settings
         """
+        self.config = config
         self.client = typesense.Client(
             {
                 "nodes": [
                     {
-                        "host": typesense_host,
-                        "port": typesense_port,
+                        "host": config.typesense_host,
+                        "port": config.typesense_port,
                         "protocol": "http",
                     }
                 ],
-                "api_key": typesense_api_key,
+                "api_key": config.typesense_api_key,
                 "connection_timeout_seconds": 10,
             }
         )
-        self.embedding_model = SentenceTransformer(embedding_model)
+        self.embedding_model = SentenceTransformer(config.embedding_model)
 
         # Load vulnerability type mapping from Typesense (lazy-loaded on first use)
         self._vulnerability_type_mapping = None
 
-        # Vector search configuration from environment variables
-        self.vector_search_k = int(os.getenv("VECTOR_SEARCH_K", "100"))
-
-        logger.info(f"Initialized search tool with model: {embedding_model}")
-        logger.debug(f"Vector search k={self.vector_search_k}")
+        logger.info(f"Initialized search tool with model: {config.embedding_model}")
+        logger.debug(f"Vector search k={config.vector_search_k}")
 
     def _get_vulnerability_type_mapping(self) -> Dict[str, str]:
         """Lazily load vulnerability type mapping from Typesense.
@@ -207,7 +199,6 @@ class VulnerabilitySearchTool:
 
         # Apply filters
         filters = self._build_filters(
-            search_type,
             cve_ids,
             ecosystems,
             severity_levels,
@@ -320,7 +311,7 @@ class VulnerabilitySearchTool:
             embedding = query_embedding if query_embedding is not None else self.embedding_model.encode(query).tolist()
             params["q"] = "*"
             params["vector_query"] = (
-                f"embedding:([{','.join(str(v) for v in embedding)}], k:{self.vector_search_k})"
+                f"embedding:([{','.join(str(v) for v in embedding)}], k:{self.config.vector_search_k})"
             )
             params["exclude_fields"] = "embedding,advisory_chunks.embedding"  # Save bandwidth
 
@@ -346,7 +337,6 @@ class VulnerabilitySearchTool:
 
     def _build_filters(
         self,
-        search_type: str,
         cve_ids: Optional[List[str]],
         ecosystems: Optional[List[str]],
         severity_levels: Optional[List[str]],
@@ -356,9 +346,8 @@ class VulnerabilitySearchTool:
     ) -> Optional[str]:
         """Build Typesense filter expression from parameters.
 
-        Note: For keyword search, vulnerability_types is not used as a filter
-        since the field is already in query_by and BM25 will naturally match it.
-        For semantic/hybrid searches, we apply the vulnerability_types filter.
+        Applies optional filters for CVE IDs, ecosystems, severity levels,
+        vulnerability types, and CVSS score thresholds.
         """
         filters = []
 

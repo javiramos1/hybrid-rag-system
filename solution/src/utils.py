@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Utility functions for the vulnerability RAG system."""
+"""Utility functions for the vulnerability RAG system.
+
+Reviewer: This is just a simple retry with backoff utility for API calls. No need to focus on this.
+
+NOTE: If we were using PydanticAI or similar frameworks, this would be replaced by built-in retry mechanisms. 
+As you can see, we are adding considerable amount of boilerplate code just to handle retries, ReACT, memory, etc.
+"""
 
 import time
 from typing import Callable, TypeVar

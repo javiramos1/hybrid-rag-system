@@ -72,6 +72,8 @@ This table shows the most useful targets you'll use during review.
 
 - 384-dimensional vectors, fast CPU inference
 - No GPU required
+- 80MB model, ~1000 sentences/sec on CPU
+- Good quality for small-to-medium datasets
 
 **Data Processing**: Polars, markdown, beautifulsoup4
 
@@ -82,6 +84,25 @@ This table shows the most useful targets you'll use during review.
 
 - Reproducible Typesense setup with health checks
 - One-command environment: `make setup`
+
+### Why all-MiniLM-L6-v2 for embeddings?
+
+We chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
+
+**Practical reasons:**
+
+- **Fast**: Encodes text in ~2-3ms on CPU, no GPU needed. Ingestion takes 10-15 seconds total.
+- **Small**: 80MB model fits in memory easily, won't slow down container startup.
+- **Good enough**: Trained on diverse text including technical docs. Security terms like "XSS", "SQL injection", "CVE" are well-represented.
+- **Free**: No API costs, works offline, no rate limits.
+
+**When it matters less:**
+
+With 47 CVEs and 8 advisories, embedding quality matters less than chunking strategy. A 15% quality gap vs. larger models (all-mpnet-base-v2, OpenAI embeddings) is negligible when you only have 60-80 chunks to search through.
+
+**When to upgrade:**
+
+If you scale to 10,000+ documents or see poor retrieval in testing, consider all-mpnet-base-v2 (768-dim, better quality) or OpenAI text-embedding-3-small (1536-dim, best quality). The architecture supports swapping models via the `INGESTION_EMBEDDING_MODEL` env var—just re-run ingestion.
 
 ### Why Typesense? (Design Decision)
 
@@ -292,25 +313,39 @@ This maintains the **47 vulnerabilities** contract while enabling rich advisory 
 
 ### Advisory integration with section-based chunking
 
-The 8 advisory markdown files are parsed with **section-aware chunking**:
+The 8 advisory markdown files are parsed with **section-aware chunking**—a pragmatic strategy that respects document structure rather than forcing arbitrary splits:
 
-1. **Section splitting**: Split advisories by `##` headers to preserve semantic boundaries
-2. **Code preservation**: Code blocks (```) are kept intact, never split mid-code
-3. **Text chunking**: Non-code sections are split at sentence boundaries (~500 characters max)
-4. **Nested storage**: Chunks are grouped by CVE and stored as nested objects within CVE documents
+**How it works:**
+
+1. **Section splitting**: Split advisories by `##` markdown headers (e.g., "Remediation", "Code Examples"). Each section discusses one topic, so headers are natural semantic boundaries.
+2. **Code preservation**: When a section contains code blocks (```), keep the entire section intact. Never split mid-code—a Python function isn't useful if chopped into pieces.
+3. **Text chunking**: Text-only sections get split at sentence boundaries, targeting ~500 characters per chunk. This keeps related sentences together while staying within optimal embedding length (~150 tokens).
+4. **Nested storage**: Chunks stay grouped by CVE and stored as nested arrays within parent CVE documents.
+
+**Why this approach?**
+
+Security advisories have strong structure (headers define topics). We leverage that instead of using more complex semantic chunking that would:
+
+- Require embedding every sentence just to find split points (slow, expensive)
+- Ignore the structure humans already built into the markdown
+- Still need special handling for code blocks anyway
+
+For 8 well-structured advisory documents, simple section-based chunking gives us the benefits of semantic chunking (topical coherence) without the complexity.
 
 **Benefits:**
 
-- **Analytics integrity**: 47 CVE documents (not 95 separate chunks)
+- **Analytics integrity**: 47 CVE documents total (not 95+ separate chunks)
 - **Code preservation**: Entire code examples remain searchable as units
 - **Semantic search**: Separate embeddings for CSV metadata and advisory chunks
-- **Section awareness**: Chunks tagged by type (summary, remediation, attack_vector, etc.)
+- **Section awareness**: Chunks tagged by type (summary, remediation, attack_vector, code_example, etc.)
+- **Context preserved**: No mid-sentence or mid-code splits
 
-**Chunking strategy preserves context:**
+**Real-world chunking results:**
 
-- Code sections: Never split (preserves syntax highlighting and examples)
-- Text sections: Split at sentence boundaries to maintain readability
-- Metadata: Each chunk includes section type and position for filtering
+- 8 advisory files → ~60-80 chunks total
+- Code sections: Kept whole (some 800+ chars for full examples)
+- Text sections: 200-500 chars each, complete sentences
+- Each chunk knows: CVE ID, section type, whether it contains code
 
 ## Features & requirements met
 

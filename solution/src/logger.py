@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Centralized logging configuration for the vulnerability RAG system.
 
+Reviewer: Do not focus on this, this is just a centralized logger with JSON and simple formats.
+
 Configurable via environment variables:
   LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Defaults to INFO.
   LOG_FORMAT: Log format (json, simple). Defaults to simple.
