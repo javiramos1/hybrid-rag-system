@@ -57,7 +57,7 @@ class VulnerabilityAgent:
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        max_iterations: Optional[int] = 5,
+        max_iterations: Optional[int] = 6,
         max_retries: Optional[int] = 2,
         typesense_host: str = "localhost",
         typesense_port: str = "8108",
@@ -79,7 +79,7 @@ class VulnerabilityAgent:
             raise ValueError("GOOGLE_API_KEY environment variable not set")
 
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
-        self.max_iterations = max_iterations or int(os.getenv("MAX_REACT_ITERATIONS", "5"))
+        self.max_iterations = max_iterations or int(os.getenv("MAX_REACT_ITERATIONS", "6"))
         self.max_retries = max_retries or int(os.getenv("MAX_RETRIES", "2"))
 
         self.client = genai.Client(api_key=self.api_key)
@@ -133,7 +133,8 @@ class VulnerabilityAgent:
                 prompt_content = user_question
             else:
                 prompt_content = get_react_iteration_prompt(
-                    user_question, state.iteration, state.search_history
+                    user_question, state.iteration, state.search_history,
+                    len(state.documents_collected), len(state.aggregations_collected)
                 )
 
             # Ask LLM what to do next (search or answer)

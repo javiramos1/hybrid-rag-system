@@ -97,14 +97,8 @@ Range: 0.0-1.0. Default: 0.5 (equal weight between keyword and semantic).
 
 IMPORTANT: Adjust alpha based on query intent:
 - 0.2-0.4: Keyword-heavy queries with specific CVEs, filters, structured data
-  Example: "Critical npm vulnerabilities" → set alpha=0.35 to favor BM25
 - 0.5: Balanced queries (default) - most queries should use this
-  Example: "How to fix CVE-2024-1234?" → use default 0.5
-- 0.6-0.8: Semantic/advisory queries asking for explanations, code examples, remediation
-  Example: "Explain RCE with code examples" → set alpha=0.65 to favor semantic/advisory content
-
-SET ALPHA EXPLICITLY when user mentions: "code examples", "explain", "how to fix", "remediation", "attack vectors", "advisory"
-Ignored for keyword and semantic search types.""",
+- 0.6-0.8: Semantic/advisory queries asking for explanations, code examples, remediation.""",
                 },
             },
             "required": ["query"],
@@ -143,8 +137,6 @@ KEY RULES:
 - Synthesize answers from collected documents/aggregations
 - Always cite sources and include grounding statements
 - If 0 results after broad search, explain why and suggest alternatives
-
-=== YOU ARE A SECURITY VULNERABILITY EXPERT WITH ACCESS TO 47 CVE DOCUMENTS.
 
 === DATA SCHEMA & AVAILABLE INFORMATION ===
 
@@ -361,7 +353,13 @@ Source: CVE-2024-1234 record"
 - Be specific and actionable"""
 
 
-def get_react_iteration_prompt(user_question: str, iteration: int, previous_searches: list) -> str:
+def get_react_iteration_prompt(
+    user_question: str,
+    iteration: int,
+    previous_searches: list,
+    documents_collected: int = 0,
+    aggregations_collected: int = 0,
+) -> str:
     """Build a ReAct-format prompt following the official ReAct pattern.
 
     Uses the standard ReAct format: Thought → Action → Observation → Final Answer
@@ -370,6 +368,8 @@ def get_react_iteration_prompt(user_question: str, iteration: int, previous_sear
         user_question: Original user question
         iteration: Current iteration number (1-indexed)
         previous_searches: List of (search_type, query, results_count) tuples from previous iterations
+        documents_collected: Number of unique CVE documents collected so far
+        aggregations_collected: Number of aggregation/statistic fields collected so far
 
     Returns:
         Prompt in official ReAct format for Gemini
@@ -380,6 +380,11 @@ def get_react_iteration_prompt(user_question: str, iteration: int, previous_sear
         scratchpad += f"\nSearch History ({len(previous_searches)} attempts):\n"
         for i, (search_type, query, results_count) in enumerate(previous_searches, 1):
             scratchpad += f"Observation {i}: Searched with {search_type} (query: '{query}') → Found {results_count} results\n"
+    
+    # Add collected data context
+    scratchpad += f"\nData Collected So Far:\n"
+    scratchpad += f"  - Unique CVE Documents: {documents_collected}\n"
+    scratchpad += f"  - Aggregation Fields: {aggregations_collected}\n"
     
     # Build the ReAct format prompt
     prompt = f"""Use the following format:
@@ -397,9 +402,9 @@ Question: {user_question}{scratchpad}
 
 Thought: I need to decide whether to search for more information or provide a final answer.
 
-DECISION CRITERIA:
-1. If you have aggregation/statistics data → Think "I now know the final answer" and provide it
-2. If you have 3+ relevant documents → Think "I now know the final answer" and provide it
+DECISION CRITERIA (check against current data collected):
+1. If you have aggregation/statistics data ({aggregations_collected} fields collected) → Think "I now know the final answer" and provide it
+2. If you have 3+ relevant documents ({documents_collected} documents collected) → Think "I now know the final answer" and provide it
 3. If you've tried 3+ different searches → Think "I now know the final answer" and provide it
 4. If a broad search ("*") returned 0 results → Think "I now know the final answer" (data doesn't exist)
 5. Otherwise, search for more information
