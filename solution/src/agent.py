@@ -195,22 +195,21 @@ class VulnerabilityAgent:
                 # LLM decided not to call a function
                 text_response = self._extract_text_response(response)
                 
-                # If we have collected data and got a text response (thinking/reasoning), synthesize
-                # This avoids waiting for explicit "Final Answer" text which may not always appear
-                has_collected_data = len(state.documents_collected) > 0 or len(state.aggregations_collected) > 0
-                
-                if has_collected_data or text_response:
-                    logger.info("Enough data collected or text response received - synthesizing comprehensive response")
-                    # Synthesize from collected data for consistent formatting, citations, and grounding
-                    state.final_answer = self._synthesize_final_answer(
-                        user_question, state, system_instruction
-                    )
-                    break
-                else:
-                    logger.warning("No function call and no data collected - trying again")
+                # Check if response is empty or malformed
+                if not text_response:
+                    logger.warning("Empty response from LLM - no function call and no text. Retrying...")
                     if state.iteration >= self.max_iterations:
-                        state.final_answer = "Could not generate answer after maximum iterations."
+                        state.final_answer = "Could not generate answer after maximum iterations - LLM returned empty responses."
                         break
+                    # Continue to next iteration
+                    continue
+                
+                # If text response exists, LLM is providing thinking/answer - synthesize it
+                logger.info("Text response received from LLM - synthesizing comprehensive response from collected data")
+                state.final_answer = self._synthesize_final_answer(
+                    user_question, state, system_instruction
+                )
+                break
 
         if state.iteration >= self.max_iterations:
             logger.warning(f"Reached max iterations ({self.max_iterations})")

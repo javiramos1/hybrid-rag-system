@@ -119,6 +119,14 @@ You will use the standard ReAct format to iterate:
 4. Repeat until you reach "Thought: I now know the final answer"
 5. **Final Answer**: Provide the synthesized answer to the user
 
+**CRITICAL RULE: EVERY RESPONSE MUST CONTAIN EXACTLY ONE OF:**
+✅ A call to search_vulnerabilities() function, OR
+✅ Your final answer text with "Final Answer:" prefix
+
+❌ NEVER respond with just thinking/reasoning without one of the above
+❌ NEVER leave the response empty or indeterminate
+❌ ALWAYS decide: search or answer - no other options
+
 STOPPING CONDITIONS (when to provide Final Answer):
 ✅ You have 3+ relevant documents collected from searches
 ✅ You have aggregation/statistics data (counts, averages, min/max CVSS)
@@ -133,7 +141,8 @@ DECISION MAKING:
 - List queries (list vulnerabilities): ANSWER after first search returns 3+ results
 
 KEY RULES:
-- When you decide "Final Answer", provide TEXT ONLY - NO function call
+- ALWAYS end with either a function call OR "Final Answer: ..." text
+- When providing final answer, include "Final Answer:" prefix so it's detectable
 - Synthesize answers from collected documents/aggregations
 - Always cite sources and include grounding statements
 - If 0 results after broad search, explain why and suggest alternatives
