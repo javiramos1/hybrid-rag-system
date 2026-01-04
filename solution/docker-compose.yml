@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  typesense:
+    image: typesense/typesense:29.0
+    restart: unless-stopped
+    ports:
+      - "8108:8108"
+    volumes:
+      - ./typesense-data:/data
+    command: '--data-dir /data --api-key=xyz --enable-cors'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    environment:
+      - TYPESENSE_ENABLE_CORS=true
