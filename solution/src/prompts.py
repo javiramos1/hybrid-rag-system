@@ -348,9 +348,10 @@ Thought: I need to decide whether to search for more information or provide a fi
 DECISION CRITERIA (check against current data collected):
 1. If you have aggregation/statistics data ({aggregations_collected} fields collected) → Think "I now know the final answer" and provide it
 2. If you have 3+ relevant documents ({documents_collected} documents collected) → Think "I now know the final answer" and provide it
-3. If you've tried 3+ different searches → Think "I now know the final answer" and provide it
-4. If a broad search ("*") returned 0 results → Think "I now know the final answer" (data doesn't exist)
-5. Otherwise, search for more information
+3. If you've tried 3+ different searches → Think "I now know the final answer" and provide it (even if just 1-2 docs)
+4. If a broad search ("*") returned 0 results → Think "I now know the final answer" (data doesn't exist, explain why)
+5. If you have 1-2 documents that directly answer the question → Think "I now know the final answer" and answer it
+6. CRITICAL: Do NOT search indefinitely. If unsure after 2+ iterations, provide answer based on what you have.
 
 Next step:"""
     return prompt

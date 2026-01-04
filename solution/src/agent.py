@@ -192,18 +192,22 @@ class VulnerabilityAgent:
                 # Continue loop - LLM will decide next action
 
             else:
-                # LLM decided not to call a function - check if it's providing a Final Answer
+                # LLM decided not to call a function
                 text_response = self._extract_text_response(response)
-                if text_response and "Final Answer" in text_response:
-                    logger.info("LLM provided final answer - synthesizing comprehensive response from collected data")
-                    # LLM decided to answer; synthesize from collected data for consistent formatting
-                    # This ensures consistent formatting, citations, and grounding statements
+                
+                # If we have collected data and got a text response (thinking/reasoning), synthesize
+                # This avoids waiting for explicit "Final Answer" text which may not always appear
+                has_collected_data = len(state.documents_collected) > 0 or len(state.aggregations_collected) > 0
+                
+                if has_collected_data or text_response:
+                    logger.info("Enough data collected or text response received - synthesizing comprehensive response")
+                    # Synthesize from collected data for consistent formatting, citations, and grounding
                     state.final_answer = self._synthesize_final_answer(
                         user_question, state, system_instruction
                     )
                     break
                 else:
-                    logger.warning("No function call and no Final Answer in response - trying again")
+                    logger.warning("No function call and no data collected - trying again")
                     if state.iteration >= self.max_iterations:
                         state.final_answer = "Could not generate answer after maximum iterations."
                         break
