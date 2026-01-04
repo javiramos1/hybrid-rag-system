@@ -75,9 +75,16 @@ Supports three search types: keyword (metadata filtering/aggregations), semantic
                 },
                 "facet_by": {
                     "type": "string",
-                    "description": """Comma-separated field names for aggregation. Returns stats (numeric) and counts (categorical). See system instructions for detailed guidance.
-Examples: "cvss_score" (stats), "ecosystem" (counts), "cvss_score,ecosystem" (both)
-Set per_page=0 if only aggregations are needed (no documents).""",
+                    "description": """Comma-separated field names for aggregation/counting. Returns stats (numeric fields) and counts (categorical fields).
+CRITICAL FOR COUNTING QUERIES: Use with per_page=0 to get aggregations only, query="*" for all documents.
+
+Examples:
+- "vulnerability_type" → Returns count of each type (for "how many types?")
+- "cvss_score" → Returns stats (avg/min/max) of CVSS scores
+- "ecosystem" → Returns count of vulnerabilities per ecosystem (npm/pip/maven)
+- "severity,vulnerability_type" → Returns both stats and counts
+
+See system instructions for detailed guidance on inventory/counting queries.""",
                 },
                 "per_page": {
                     "type": "integer",
@@ -208,14 +215,47 @@ Each CVE document contains:
 - has_advisory: Boolean flag indicating if CVE has detailed advisory documentation (8 out of 47 CVEs)
 - Advisory Text: (if has_advisory=true) Detailed explanation, code examples, remediation steps, attack vectors
 
-Note: Only 8 CVEs have detailed advisories with code examples and attack vectors. Use additional_filters="has_advisory:true" 
-to filter queries to CVEs with rich documentation when users ask for explanations, examples, or remediation steps.
+DATASET FACTS:
+- **Total CVE documents indexed**: 47 vulnerabilities
+- **Ecosystems covered**: npm, pip, and maven
+- **Security advisories**: 8 detailed advisory documents with code examples and attack vectors. IMPORTANT: Use additional_filters="has_advisory:true" when users ask for explanations, 
+  code examples, or remediation steps to prioritize advisory-rich documents.
+- **Vulnerability types DEFINED**: 34 different types in the vulnerability_types.csv reference table
+- **Vulnerability types USED**: 10 types appearing in the 47 CVE documents (SQL Injection, XSS, RCE, Path Traversal, etc.)
+- **Severity distribution**: 
+  - Critical: 4 vulnerabilities (8.5%)
+  - High: 25 vulnerabilities (53.2%)
+  - Medium: 14 vulnerabilities (29.8%)
+  - Low: 4 vulnerabilities (8.5%)
 
 === QUERY ROUTING STRATEGY ===
 
 Default to search_type="hybrid" unless user is asking ONLY about metadata or ONLY about concepts.
 
-1. HYBRID QUERIES (search_type="hybrid") - DEFAULT:
+1. ANALYTICAL QUERIES (search_type="keyword"):
+   Questions asking about counts, totals, or unique values of ANY field
+   Triggers: "how many", "count", "total", "unique", "number of", "list all distinct", "what types"
+   
+   **CRITICAL BEHAVIOR**: Faceting on a field returns counts of that field's values in the result set.
+   For broad inventory queries, use query="*" (all documents) with facet_by and per_page=0 for aggregations.
+   
+   Examples:
+   - "How many vulnerability types do we have?"
+     → query="*", facet_by="vulnerability_type", per_page=0
+     → Returns COUNT of each vulnerability type across all 47 CVEs
+   - "How many vulnerabilities per ecosystem?"
+     → query="*", facet_by="ecosystem", per_page=0
+     → Returns counts: npm (X), pip (Y), maven (Z)
+   - "Average CVSS score by severity?"
+     → query="*", facet_by="severity,cvss_score", per_page=0
+     → Returns both counts (severity) and stats (CVSS average)
+   - "What packages have the most vulnerabilities?"
+     → query="*", facet_by="package_name", per_page=0, sort facet results by count
+   
+   **INTERPRETATION**: The facet counts show which values appear in the documents retrieved. 
+   If you search all documents (query="*"), facet results show the complete distribution in the dataset.
+
+2. HYBRID QUERIES (search_type="hybrid") - DEFAULT:
    Use by default: combines both metadata filters AND semantic understanding
    
    Examples (all benefit from hybrid):
@@ -226,19 +266,19 @@ Default to search_type="hybrid" unless user is asking ONLY about metadata or ONL
    - "Explain SQL injection in npm vulnerabilities"
      → query="SQL injection attack mechanism explanation", ecosystems=["npm"], per_page=15
 
-2. KEYWORD QUERIES (search_type="keyword") - ONLY when:
+3. KEYWORD QUERIES (search_type="keyword") - ONLY when:
    Question is PURELY about filtering/aggregating metadata (no explanations/examples needed)
-   Triggers: "list", "show", "count", "filter", "average", "how many", "total"
+   Triggers: "list", "show", "filter" (when aggregation/faceting is NOT the goal)
    
    Examples:
-   - "List all Critical vulnerabilities in npm"
+   - "List all Critical vulnerabilities in npm" (showing documents, not counts)
      → query="*", severity_levels=["Critical"], ecosystems=["npm"], per_page=20
-   - "What is the average CVSS score for High severity?"
-     → query="*", severity_levels=["High"], facet_by="cvss_score", per_page=0
    - "Show vulnerabilities for CVE-2024-1234"
      → query="CVE-2024-1234", cve_ids=["CVE-2024-1234"], per_page=5
+   - "Filter vulnerabilities with CVSS >= 9"
+     → query="*", additional_filters="cvss_score:>=9.0", per_page=15
 
-3. SEMANTIC QUERIES (search_type="semantic") - ONLY when:
+4. SEMANTIC QUERIES (search_type="semantic") - ONLY when:
    Question is PURELY conceptual (no metadata filters needed, just explanations/examples)
    Triggers: "explain", "how does", "show example", "demonstrate" (WITHOUT specific CVE/package/severity)
    
@@ -328,11 +368,13 @@ CRITICAL: When providing Final Answer, ALWAYS generate helpful, user-friendly re
 Use markdown formatting (headers, bullet points, code blocks with language tags). Aim for 500+ words minimum.
 
 **For Aggregation/Statistical Queries (include):**
-1. Clear statistical summary with key numbers (averages, min/max, counts)
-2. Interpretation for security impact
-3. Context and recommendations
-4. Reference specific CVEs if available
-5. **CRITICAL**: End with grounding: "Source: Analyzed X CVE records from the vulnerability database"
+1. Clear statistical summary with key numbers (totals, counts, averages, min/max)
+2. Breakdown by category if applicable (e.g., "10 types: SQL Injection (3), XSS (2), ...")
+3. Interpretation for security impact or dataset context
+4. Context and recommendations
+5. Reference specific examples if available from the aggregations
+6. **CRITICAL**: End with grounding: "Source: Analyzed X CVE records from the vulnerability database"
+7. **IMPORTANT FOR COUNTING QUERIES**: If using facet_by, clearly state that counts represent the values found in the dataset. Example: "The dataset contains 10 distinct vulnerability types across 47 CVEs: [list them]"
 
 **For Empty/No Results (instead of "No results found"):**
 1. Explain what was searched (filters, query terms, vulnerability types)
