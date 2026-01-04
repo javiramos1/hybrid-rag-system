@@ -37,35 +37,30 @@ Supports three search types: keyword (metadata filtering/aggregations), semantic
                 "cve_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": """Filter by specific CVE IDs.
-Examples: ["CVE-2024-1234"], ["CVE-2024-1234", "CVE-2024-5678"]""",
+                    "description": "Filter by specific CVE IDs (e.g., [\"CVE-2024-1234\"]).",
                 },
                 "ecosystems": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": """Filter by package ecosystem. Valid values: "npm", "pip", "maven"
-Examples: ["npm"], ["npm", "pip"]""",
+                    "description": "Filter by ecosystem: npm, pip, or maven.",
                 },
                 "severity_levels": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": """Filter by severity level. Valid values: "Critical", "High", "Medium", "Low"
-Examples: ["Critical"], ["Critical", "High"]""",
+                    "description": "Filter by severity: Critical, High, Medium, or Low.",
                 },
                 "vulnerability_types": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": """Filter by vulnerability type (XSS, SQL Injection, RCE, etc.).
-Examples: ["XSS"], ["SQL Injection", "RCE"]""",
+                    "description": "Filter by vulnerability type (XSS, SQL Injection, RCE, etc.).",
                 },
                 "min_cvss_score": {
                     "type": "number",
-                    "description": """Minimum CVSS score (0.0-10.0). Examples: 7.0 (High+), 9.0 (Critical).""",
+                    "description": "Minimum CVSS score (0.0-10.0).",
                 },
                 "additional_filters": {
                     "type": "string",
-                    "description": """Raw Typesense filter expression for edge cases. See system instructions for syntax and examples.
-Syntax examples: "cvss_score:<=9.0", "has_advisory:true", "published_date:>=2024-01-01\"""",
+                    "description": "Raw Typesense filter expression (e.g., \"cvss_score:<=9.0\", \"has_advisory:true\"). See system instructions.",
                 },
                 "facet_by": {
                     "type": "string",
@@ -75,20 +70,15 @@ Set per_page=0 if only aggregations are needed (no documents).""",
                 },
                 "per_page": {
                     "type": "integer",
-                    "description": """Number of results to return (0=aggregations only). See system instructions for recommended values per query type.
-- 0: Pure aggregation queries (no documents needed)
-- 5-10: Specific/filtered queries (e.g., single CVE)
-- 15-20: Semantic/conceptual queries (need coverage)
-- 25-30: Broad exploratory queries""",
+                    "description": "Number of results to return (0=aggregations only). See system instructions for recommended values.",
                 },
                 "group_by": {
                     "type": "string",
-                    "description": """Group results by field to deduplicate (limits to 3 results per group). See system instructions for usage patterns.
-Note: With CVE-centric ingestion, grouping is rarely needed since each CVE is already one document.""",
+                    "description": "Group results by field to limit per-group results (rarely needed with CVE-centric documents). See system instructions.",
                 },
                 "sort_by": {
                     "type": "string",
-                    "description": """Sort order. Examples: "cvss_score:desc", "_text_match:desc", "published_date:desc\"""",
+                    "description": "Sort order (e.g., \"cvss_score:desc\", \"_text_match:desc\").",
                 },
                 "hybrid_search_alpha": {
                     "type": "number",
@@ -130,15 +120,22 @@ You will use the standard ReAct format to iterate:
 STOPPING CONDITIONS (when to provide Final Answer):
 ✅ You have 3+ relevant documents collected from searches
 ✅ You have aggregation/statistics data (counts, averages, min/max CVSS)
-✅ You've already tried 3+ different searches
+✅ You've already tried 2+ different search approaches (different search_type or different parameters)
 ✅ A broad search ("*") returned 0 results (data doesn't exist)
+✅ First search for specific query returned results (1+ CVE for list/filter queries, 3+ for conceptual queries)
 ✅ You have sufficient context to answer comprehensively
+
+CRITICAL ABORT CRITERIA (STOP searching, ANSWER immediately):
+🛑 After 1 search stop if you already have the ANSWER
+🛑 After 2 searches with same/similar results → ANSWER (don't keep retrying identical searches)
+🛑 After 3+ total search attempts → ANSWER (even if results seem incomplete)
 
 DECISION MAKING:
 - Aggregation queries (avg CVSS, count CVEs): ANSWER after first search returns stats
 - Specific CVE queries: ANSWER after first search if found, else try broader search
 - Explanation queries (explain XSS, code examples): ANSWER after collecting 3+ documents
-- List queries (list vulnerabilities): ANSWER after first search returns 3+ results
+- List/filter queries (list vulnerabilities, packages with X): ANSWER after first search returns 3+ results
+- If results < 3 after 2+ attempts, synthesize answer from what you have (better than infinite retry loop)
 
 KEY RULES:
 - ALWAYS end with either a function call OR "Final Answer: ..." text
@@ -232,21 +229,18 @@ Set per_page=0 for aggregations-only queries.
 **Valid facet_by field names**: "cve_id", "package_name", "ecosystem", "vulnerability_type", "severity", "cvss_score", "has_advisory"
 Examples: "cvss_score" (returns avg/min/max), "ecosystem" (returns counts), "severity,vulnerability_type" (both)
 
-**group_by**: Rarely needed with CVE-centric documents (each CVE is one unique document, no duplicates).
-ONLY use if you want to limit results per category for diversity. Examples:
-- group_by="ecosystem" (show at most 3 npm, 3 pip, 3 maven) for ecosystem diversity
-- group_by="severity" (show at most 3 Critical, 3 High, etc.) for severity diversity
-In most cases, explicit filtering (ecosystems=["npm", "pip"]) is clearer and preferred.
+**group_by**: Rarely needed with CVE-centric documents (each CVE is one unique document). 
+Only use if you want to limit results per category (e.g., group_by="ecosystem" for 3 npm + 3 pip + 3 maven).
 
-**additional_filters**: Raw Typesense filter for edge cases. Examples: "cvss_score:<=9.0", "has_advisory:true"
+**additional_filters**: Raw Typesense filter for edge cases (e.g., "cvss_score:<=9.0", "has_advisory:true").
 
 **query text**: 
-- Keyword: Specific terms or "*" for all
-- Semantic: Descriptive natural language phrases
-- Hybrid: Action words (fix, remediation, code, example, impact)
+- Keyword: Use "*" for all, or specific CVE ID/package/type terms
+- Semantic: Descriptive natural language phrases (attack vectors, code examples, remediation steps)
+- Hybrid: Action words (fix, remediation, code, example, impact) + filters
 
-**cve_ids, ecosystems, severity_levels, vulnerability_types**: Pass as arrays. Case-sensitive.
-Valid ecosystems: "npm", "pip", "maven". Valid severity: "Critical", "High", "Medium", "Low".
+**cve_ids, ecosystems, severity_levels, vulnerability_types**: Pass as arrays (case-sensitive).
+Valid: ecosystems=[npm, pip, maven], severity=[Critical, High, Medium, Low].
 
 === TYPESENSE USAGE GUIDELINES ===
 
@@ -256,34 +250,31 @@ Valid ecosystems: "npm", "pip", "maven". Valid severity: "Critical", "High", "Me
 
 === FINAL ANSWER FORMATTING & ERROR HANDLING ===
 
-CRITICAL: When providing your Final Answer, ALWAYS generate a helpful, user-friendly response. Never return empty text or placeholder responses.
+CRITICAL: When providing Final Answer, ALWAYS generate helpful, user-friendly response. Never return empty text or placeholder responses.
 
-**For Successful Queries (Final Answer only):**
-Your response MUST contain:
+**For Successful Queries (include):**
 1. Clear opening statement answering the question directly
 2. Detailed information: CVE IDs, CVSS scores, versions, affected packages
 3. Code examples where applicable (vulnerable + fixed patterns)
 4. Remediation steps or explanations relevant to the query
-5. **CRITICAL**: Clear grounding statement: "Source: X CVE records from the vulnerability database"
+5. **CRITICAL**: Clear grounding: "Source: X CVE records from the vulnerability database"
 
-Use markdown formatting: headers (##, ###), bullet points, code blocks with language tags. Be comprehensive - aim for 500+ words minimum.
+Use markdown formatting (headers, bullet points, code blocks with language tags). Aim for 500+ words minimum.
 
-**For Aggregation/Statistical Queries (Final Answer only):**
+**For Aggregation/Statistical Queries (include):**
 1. Clear statistical summary with key numbers (averages, min/max, counts)
-   - Example: "The average CVSS score for Critical vulnerabilities is 9.44 (ranging from 9.1 to 9.8)"
-2. Interpret statistics for security impact ("A 9.44 average CVSS is extremely high - these are severe")
-3. Provide context and recommendations ("Critical vulnerabilities require patches within 24-48 hours")
-4. If documents available, reference specific CVEs that drive statistics
+2. Interpretation for security impact
+3. Context and recommendations
+4. Reference specific CVEs if available
 5. **CRITICAL**: End with grounding: "Source: Analyzed X CVE records from the vulnerability database"
 
-**For Empty/No Results (Final Answer only):**
-DO NOT say "No results found." Instead:
+**For Empty/No Results (instead of "No results found"):**
 1. Explain what was searched (filters, query terms, vulnerability types)
-2. Suggest why no results: "There may be no RCE vulnerabilities in Python ecosystem" or "Check spelling of CVE ID"
-3. Offer alternative queries to try (different ecosystems, severity levels, vulnerability types)
-4. List valid search parameters: ecosystems (npm, pip, maven), severity (Critical, High, Medium, Low), types (XSS, SQL Injection, RCE, etc.), CVE-2024-*
+2. Suggest why no results exist
+3. Offer alternative queries to try
+4. List valid search parameters (ecosystems: npm/pip/maven; severity: Critical/High/Medium/Low; types: XSS/SQL Injection/RCE; CVE-YYYY-*)
 
-**For Ambiguous Queries (Final Answer only):**
+**For Ambiguous Queries (include):**
 1. Clarify what interpretation you searched for
 2. Explain the search parameters used
 3. Ask if they meant something different
