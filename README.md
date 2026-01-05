@@ -438,6 +438,7 @@ This is a code challenge demonstration. For production, these enhancements are e
 - Retries with exponential backoff
 - Chat history and state management
 - Type-safe response validation
+- Model rate limiting management
 
 Result: agent.py shrinks from 200+ lines to ~30 lines of actual logic.
 

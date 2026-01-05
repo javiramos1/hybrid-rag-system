@@ -34,6 +34,7 @@ Frameworks like PydanticAI automatically handle:
 - Chat history and conversation memory (automatic)
 - Tool calling and result collection (seamless)
 - Type-safe response handling (no try/except chains)
+- Rate limiting and quota management (built-in)
 
 In Production, besides using high-level frameworks like PydanticAI, we would also leverage tracing tools like LangSmith 
 for monitoring, debugging, and improving agent performance and other MCP servers for long term memory, web search, library search (Context7), etc.
@@ -261,9 +262,14 @@ class VulnerabilityAgent:
             True if final answer was found and state updated, False to continue iteration
         """
         # Extract text response
+        # NOTE: Exception handling here is intentionally broad. The response object
+        # may vary (sometimes a string, sometimes an object with attributes).
+        # We catch all exceptions and fall back to None, which triggers another
+        # iteration. This is safe because the worst case is one extra iteration.
         try:
             text_response = response.text if hasattr(response, "text") else None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to extract text from response: {e}")
             text_response = None
         
         if not text_response:

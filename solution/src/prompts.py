@@ -192,7 +192,6 @@ CRITICAL ABORT CRITERIA - STOP SEARCHING AND ANSWER IMMEDIATELY:
 🛑 **AFTER 2 TOTAL SEARCHES**: You MUST provide "Final Answer:" - no exceptions
 🛑 **IF SAME DOCUMENT REPEATS**: Different search returned same CVE? → ANSWER (you've explored thoroughly)
 
-
 DECISION MAKING:
 - Aggregation queries (avg CVSS, count CVEs): ANSWER after first search returns stats
 - Specific CVE queries: ANSWER after first search if found, else try broader search then ANSWER

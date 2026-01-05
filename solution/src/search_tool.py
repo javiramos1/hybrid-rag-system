@@ -102,14 +102,20 @@ class VulnerabilitySearchTool:
         # Load embedding model for semantic search; encodes queries into vectors
         self.embedding_model = SentenceTransformer(config.embedding_model)
 
-        # Load vulnerability type mapping from Typesense (lazy-loaded on first use)
-        self._vulnerability_type_mapping = None
+        # Pre-load vulnerability type mapping from Typesense at startup
+        # This avoids ~100-200ms latency on first search when lazy-loading
+        try:
+            self._vulnerability_type_mapping = self._load_vulnerability_type_mapping()
+            logger.info(f"Loaded {len(self._vulnerability_type_mapping)} vulnerability type mappings")
+        except Exception as e:
+            logger.warning(f"Failed to pre-load vulnerability type mappings: {e}. Will lazy-load on first use.")
+            self._vulnerability_type_mapping = None
 
         logger.info(f"Initialized search tool with model: {config.embedding_model}")
         logger.debug(f"Vector search k={config.vector_search_k}")
 
-    def _get_vulnerability_type_mapping(self) -> Dict[str, str]:
-        """Lazily load vulnerability type mapping from Typesense.
+    def _load_vulnerability_type_mapping(self) -> Dict[str, str]:
+        """Load vulnerability type mapping from Typesense.
 
         Maps common abbreviations (RCE, XSS, etc.) to their full names from the database.
         
@@ -130,13 +136,10 @@ class VulnerabilitySearchTool:
         Both approaches solve this more elegantly, but for now this simple mapping is sufficient.
         Only creates mappings for abbreviations not already in the database.
         """
-        if self._vulnerability_type_mapping is not None:
-            return self._vulnerability_type_mapping
-
         mapping = {}
         try:
             # Query Typesense to get all unique vulnerability types
-            logger.debug("Querying Typesense for unique vulnerability types...")
+            logger.debug("Loading vulnerability type mappings from Typesense...")
             response = self.client.collections["vulnerabilities"].documents.search(
                 {
                     "q": "*",
@@ -176,9 +179,15 @@ class VulnerabilitySearchTool:
         except Exception as e:
             logger.warning(f"Failed to load vulnerability type mapping from Typesense: {e}")
 
-        # Cache the mapping
-        self._vulnerability_type_mapping = mapping
         return mapping
+
+    def _get_vulnerability_type_mapping(self) -> Dict[str, str]:
+        """Get cached vulnerability type mapping (or empty dict if failed to load).
+        
+        Returns the pre-loaded mapping from initialization.
+        If initialization failed, returns empty dict (filters will use exact matching).
+        """
+        return self._vulnerability_type_mapping or {}
 
     def search_vulnerabilities(
         self,
