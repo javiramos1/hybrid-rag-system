@@ -140,8 +140,15 @@ I evaluated four major search approaches:
 **Why not the others:**
 
 - **PostgreSQL + pgvector**: Duplicate metadata across chunks OR maintain complex joins. Manual result merging needed.
-- **SQLite + FAISS**: Two separate systems requiring glue code. FAISS has no filtering—inefficient.
-- **PostgreSQL only**: Can't do semantic search.
+- **SQLite + FAISS**: Two separate systems with significant operational overhead:
+  - FAISS is an in-memory index (no persistence without custom serialization)
+  - No native filtering in FAISS—retrieve all nearest neighbors, then filter in application code (inefficient)
+  - Manual rank fusion: run SQL keyword search AND FAISS vector search separately, then merge results (complex logic)
+  - No faceting/aggregations in FAISS—must post-process results in Python
+  - Requires maintaining two schemas and keeping them in sync (data consistency burden)
+  - Scaling becomes complex: FAISS doesn't partition vectors horizontally; SQLite is single-writer
+  - No distributed indexing: both FAISS and SQLite struggle at scale (terabytes of vectors, millions of CVEs)
+- **PostgreSQL only**: Can't do semantic search. Simple text search.
 
 **Real-world context:** I reviewed public services like [Snyk Security](https://security.snyk.io/) and observed they rely on search engines. This influenced our assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
 
