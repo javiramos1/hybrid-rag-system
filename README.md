@@ -6,11 +6,14 @@ A compact, production-minded hybrid RAG system that answers plain-English questi
 
 Always use the project's Makefile for setup, ingest, run and tests. The Makefile centralizes environment, dependencies and Docker orchestration so reviewers can reproduce runs reliably.
 
+**IMPORTANT**: You need a Google API key to run this system. Get one free at [Google AI Studio](https://aistudio.google.com/app/apikey).
+
 From the repository root:
 
 ```bash
 cd solution
-make setup    # create venv, install deps, start Typesense
+make setup    # create venv, install deps, start Typesense, setup .env
+# The setup will prompt you to paste your Google API key (or you can add it to .env manually)
 make ingest   # build embeddings and index documents into Typesense
 ```
 
@@ -21,6 +24,12 @@ make run                  # interactive CLI
 make query Q="<your question>"  # single-query mode
 make test                 # run the full test suite (31 unit tests)
 make int-tests            # run integration tests (17 comprehensive queries)
+```
+
+**Note**: If you skip the API key during setup, edit `solution/.env` and add:
+
+```bash
+GOOGLE_API_KEY=your_api_key_here
 ```
 
 ## Makefile summary

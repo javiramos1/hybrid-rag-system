@@ -198,11 +198,32 @@ docs: ## Open documentation
 
 ## Utility Targets
 
-setup: clean venv install docker-up ## Complete setup (create venv, install, start docker)
+setup: clean venv install docker-up ## Complete setup (create venv, install, start docker, setup .env)
 	@echo "$(GREEN)✓ Setup complete!$(NC)"
 	@echo ""
+	@echo "$(BLUE)Configuring environment...$(NC)"
+	@if [ ! -f .env ]; then \
+		cp .env.example .env; \
+		echo "$(GREEN)✓ Created .env file from template$(NC)"; \
+		echo ""; \
+		echo "$(YELLOW)⚠️  REQUIRED: Set your Google API key$(NC)"; \
+		echo "  Get your key at: https://aistudio.google.com/app/apikey"; \
+		echo "  Then edit solution/.env and set:"; \
+		echo "    GOOGLE_API_KEY=your_api_key_here"; \
+		echo ""; \
+		read -p "$(BLUE)Paste your Google API key (or press Enter to skip):$(NC) " api_key; \
+		if [ -n "$$api_key" ]; then \
+			sed -i 's/GOOGLE_API_KEY=.*/GOOGLE_API_KEY='$$api_key'/' .env; \
+			echo "$(GREEN)✓ API key saved to .env$(NC)"; \
+		else \
+			echo "$(YELLOW)⚠️  Skipped. You'll need to set GOOGLE_API_KEY in .env before running.$(NC)"; \
+		fi; \
+	else \
+		echo "$(YELLOW)✓ .env already exists$(NC)"; \
+	fi
+	@echo ""
 	@echo "$(BLUE)Next steps:$(NC)"
-	@echo "  1. Set your API key: export GOOGLE_API_KEY='your_key_here'"
+	@echo "  1. Verify GOOGLE_API_KEY is set in solution/.env"
 	@echo "  2. Run data ingestion: make ingest"
 	@echo "  3. Start using the system: make run"
 	@echo ""
