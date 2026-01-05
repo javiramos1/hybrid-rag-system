@@ -40,6 +40,25 @@ This table shows the most useful targets you'll use during review.
 | `make int-tests` | Run 17 integration tests (all RAG types) |
 | `make lint` / `make format` / `make type-check` | Code quality checks |
 | `make clean` / `make reset` | Remove venv / reset Docker state |
+| `make zip` | Create distribution archive (tar.gz, excludes typesense-data, venv, cache) |
+
+## Assumptions
+
+This solution is tailored for a specific use case and data profile:
+
+**Use case**: Vulnerability search and basic analytics over semi-structured data (CVE metadata + advisory text). The system assumes a search engine is already operational; we're reusing it rather than building from scratch.
+
+**Data shape**: Semi-structured (not fully relational, not purely unstructured). Structured metadata (CVE ID, CVSS, versions) paired with advisory documents that benefit from semantic search.
+
+**Scale & simplicity**: We prioritize avoiding data duplication across different formats and maintaining consistency. Simplicity matters as much as scale—if the system becomes harder to reason about, it's harder to maintain.
+
+**When this approach may not fit:**
+
+- If analytics and aggregations dominate your workload over search, a data warehouse (Snowflake, BigQuery) is better suited than a search engine.
+- If data is heavily unstructured (pure text documents with minimal metadata), a vector-only system may be simpler than hybrid search.
+- If strict ACID compliance for transactional updates is required, a traditional database is necessary.
+
+For the given dataset (47 CVEs with semi-structured advisories), this hybrid retrieval pattern efficiently balances search capability with operational simplicity.
 
 ## What this project does (short)
 
@@ -99,10 +118,6 @@ I chose this model because it hits the sweet spot for prototype-to-production RA
 **When it matters less:**
 
 With 47 CVEs and 8 advisories, embedding quality matters less than chunking strategy. A 15% quality gap vs. larger models (all-mpnet-base-v2, OpenAI embeddings) is negligible when you only have 60-80 chunks to search through.
-
-**When to upgrade:**
-
-If you scale to 10,000+ documents or see poor retrieval in testing, consider all-mpnet-base-v2 (768-dim, better quality) or OpenAI text-embedding-3-small (1536-dim, best quality). The architecture supports swapping models via the `INGESTION_EMBEDDING_MODEL` env var—just re-run ingestion.
 
 ### Why Typesense? (Design Decision)
 

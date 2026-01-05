@@ -1,4 +1,4 @@
-.PHONY: help venv install install-dev clean test int-tests lint format type-check docker-up docker-down docker-logs health ingest run interactive docs setup reset status version
+.PHONY: help venv install install-dev clean test int-tests lint format type-check docker-up docker-down docker-logs health ingest run interactive docs setup reset status version zip
 
 # Variables
 PYTHON := python3
@@ -43,6 +43,9 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(GREEN)Documentation:$(NC)"
 	@echo "  make docs              Open Typesense documentation"
+	@echo ""
+	@echo "$(GREEN)Distribution:$(NC)"
+	@echo "  make zip               Create distribution zip (excludes typesense-data, venv)"
 	@echo ""
 
 ## Environment Setup
@@ -220,5 +223,23 @@ version: ## Show versions of key tools
 	@if [ -d "$(VENV_DIR)" ]; then \
 		echo "  pip:          $$($$(VENV_PIP) --version)"; \
 	fi
+
+## Distribution
+
+zip: ## Create a distribution archive (tar.gz) excluding typesense-data, venv, cache
+	@echo "$(YELLOW)Creating distribution archive...$(NC)"
+	@cd .. && tar --exclude='typesense-data' \
+		--exclude='.venv' \
+		--exclude='__pycache__' \
+		--exclude='.pytest_cache' \
+		--exclude='.mypy_cache' \
+		--exclude='.ruff_cache' \
+		--exclude='*.egg-info' \
+		--exclude='.env' \
+		--exclude='.DS_Store' \
+		--exclude='*.pyc' \
+		-czf hybrid-rag-system.tar.gz README.md solution/ task/ && \
+	echo "$(GREEN)✓ Created hybrid-rag-system.tar.gz$$(du -h hybrid-rag-system.tar.gz | cut -f1)$(NC)" || \
+	echo "$(RED)✗ Failed to create archive$(NC)"
 
 .DEFAULT_GOAL := help
