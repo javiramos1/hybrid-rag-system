@@ -202,6 +202,7 @@ DECISION MAKING:
 - Specific CVE queries: ANSWER after first search if found, else try broader search then ANSWER
 - Explanation queries (explain XSS, code examples): ANSWER after 1-2 searches collect documents
 - List/filter queries (list vulnerabilities, packages with X): ANSWER after first search returns 1+ results
+- **Coverage/Percentage queries** (what % have X, Y, Z): ONE search with has_advisory:true + facet_by="advisory_chunks.section" → calculate percentages manually from results
 - If results < 3 after 2 attempts, synthesize answer from what you have (better than infinite retry loop)
 
 === DATA SCHEMA & AVAILABLE INFORMATION ===
@@ -236,56 +237,57 @@ Note: Code blocks appear within sections (marked with is_code=true), not as a se
 
 USE FILTERS FOR WELL-DOCUMENTED QUERIES - CRITICAL EXPLANATION:
 
-⚠️ **How Advisory Chunk Filters Work (Correct Syntax):**
-1. Typesense nested array filtering syntax: `field.{filter_conditions}` (uses curly braces for nested objects)
-2. When you use additional_filters with "advisory_chunks.{section:=remediation}", Typesense filters to ONLY return CVEs that have at least one chunk with section="remediation"
-3. When you combine filters with &&: "has_advisory:true && advisory_chunks.{section:=remediation}", Typesense returns CVEs that have BOTH the advisory flag AND a remediation section
-4. The has_advisory flag is a document-level boolean - use "has_advisory:true" to filter to only the 8 CVEs that have any advisory at all
-5. Combining has_advisory with section filters guarantees you get CVEs with rich advisory content
+⚠️ **Nested Field Filter Syntax** (for advisory_chunks):
+- Typesense uses curly braces for nested objects: advisory_chunks.{section:=remediation}
+- Returns CVEs that have at least one chunk with that section type
+- Combine with has_advisory:true: "has_advisory:true && advisory_chunks.{section:=remediation}"
+- Valid sections: summary, remediation, testing, best_practices, details (from ingestion section categorization)
+- For code-only queries: advisory_chunks.{is_code:=true} (marked during chunking)
 
-✅ **Correct Usage Examples (with proper Typesense syntax):**
-- "Show CVEs with advisory documentation": additional_filters="has_advisory:true"
+✅ **Examples:**
 - "Show CVEs with remediation guidance": additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}"
 - "Show CVEs with testing documentation": additional_filters="has_advisory:true && advisory_chunks.{section:=testing}"
-- "Show CVEs with best practices": additional_filters="has_advisory:true && advisory_chunks.{section:=best_practices}"
-- "Show CVEs with detailed technical information": additional_filters="has_advisory:true && advisory_chunks.{section:=details}"
-- "Show CVEs with comprehensive documentation": additional_filters="has_advisory:true && advisory_chunks.{section:=remediation} && advisory_chunks.{section:=testing}"
+- "Show code examples": additional_filters="has_advisory:true && advisory_chunks.{is_code:=true}"
 
-❌ **Common Mistakes:**
-- Using "advisory_chunks.section:remediation" instead of "advisory_chunks.{section:=remediation}" (missing curly braces breaks nested filtering)
-- Using "advisory_chunks.{section:=remediation}" when you meant testing/best_practices/details (check valid section types above)
-- Using semantic search on "code examples" instead of filtering by section type (returns all results, not just relevant sections)
-- Using per_page=0 with per_page=20 (confusing - pick ONE: 0 for aggregations only, >0 for documents)
-- Forgetting to use additional_filters when user asks "well-documented" (they want FILTERED results, not semantic search)
-- Using facet_by instead of additional_filters (faceting counts field values, filters narrows result set)
+❌ **Common mistakes:**
+- Missing curly braces: "advisory_chunks.section:remediation" → ✅ use "advisory_chunks.{section:=remediation}"
+- Wrong section names: Check valid types above (summary, remediation, testing, best_practices, details)
+- Using semantic search when filtering needed: "remediation guidance" won't filter → ✅ use additional_filters instead
 
-✅ **Search Parameters for "Well-Documented" Queries:**
-- query="*" (get all documents matching filter)
-- search_type="keyword" (filtering doesn't need semantic matching)
-- additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}" (nested field syntax with curly braces)
-- facet_by="vulnerability_type,severity" (show which types are well-documented)
-- per_page=20 (return actual documents so user can see them)
+✅ **Search Parameters for Well-Documented Queries:**
+- search_type="keyword" (filtering doesn't need semantic understanding)
+- query="*" (all documents matching the filter)
+- additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}" (nested syntax with curly braces)
+- per_page=0 (aggregations only - we just need counts, not documents)
+- facet_by="vulnerability_type" (optional - show breakdown by type)
 
-FACET BY SECTION TYPE FOR COVERAGE ANALYSIS:
-- facet_by="has_advisory" → Count CVEs with/without advisories (8 with, 39 without)
-- facet_by="advisory_chunks.section" → Distribution of section types (use nested field faceting)
-- Combine: facet_by="has_advisory,vulnerability_type" → Which vulnerability types have advisories
+⚠️ **TYPESENSE ARCHITECTURAL PATTERN - Faceting on denormalized top-level fields:**
+Typesense faceting works ONLY on top-level document fields (cve_id, package_name, severity, cvss_score, ecosystem, vulnerability_type).
+These are created during CSV denormalization in ingestion (flattened from 4 normalized tables into one CVE document).
+Nested fields (advisory_chunks.section) can be FILTERED but NOT FACETED (design tradeoff for storage efficiency).
+Why denormalization? Search engines prefer one document per entity vs. joins at query time.
 
-SECTION ANALYTICS QUERIES (counting/distribution):
-When users ask "how many CVEs have X?" or "which types have Y?", use filters + faceting:
+COVERAGE/PERCENTAGE QUERIES - PATTERN FOR NESTED FIELD COUNTING:
+When users ask "what percentage have X, Y, and Z?":
 
-Example 1: "How many CVEs have remediation guidance?"
-→ additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}", per_page=0, facet_by="vulnerability_type"
-→ total_found = count of CVEs with remediation sections, facets show breakdown by type
+1. Get total: search_vulnerabilities(query="*", additional_filters="has_advisory:true", per_page=0)
+   → Save total_found
+2. For each type (remediation, testing, best_practices):
+   → search_vulnerabilities(query="*", additional_filters="has_advisory:true && advisory_chunks.{section:=TYPE}", per_page=0)
+   → Save total_found for each
+3. Calculate: percentage = (section_count / total) * 100
 
-Example 2: "Distribution of advisory section types?"
-→ query="*", facet_by="advisory_chunks.section", per_page=0
-→ Returns counts: summary, remediation, testing, best_practices, details 
+⚠️ **CRITICAL**: Don't combine multiple section filters with &&: ❌ "advisory_chunks.{section:=testing} && advisory_chunks.{section:=remediation}"
+✅ Instead: Search for each section separately, then calculate percentages from results.
 
-Example 3: "Which vulnerability types have detailed advisories?"
-→ query="*", additional_filters="has_advisory:true", facet_by="vulnerability_type", per_page=0
-
-CRITICAL: Use per_page=0 for pure analytics (no documents needed, just counts).
+AGGREGATION QUERIES - Use top-level denormalized fields (from CSV ingestion):
+Faceting counts distinct values of a field across matching documents. Always use per_page=0 for aggregations.
+- "How many vulnerability types?" → query="*", facet_by="vulnerability_type", per_page=0
+  (returns: total_found=47, facet_counts=[XSS: 5, SQLi: 3, RCE: 4, ...])
+- "Vulnerabilities per ecosystem?" → query="*", facet_by="ecosystem", per_page=0
+  (returns: npm: 18, pip: 17, maven: 12)
+- "Advisory coverage by type?" → query="*", additional_filters="has_advisory:true", facet_by="vulnerability_type", per_page=0
+  (shows which types among 8 CVEs with advisories have most documentation)
 
 QUERY EXAMPLE (user asks for "well-documented with remediation"):
 ❌ DON'T: hybrid search for "remediation guidance" (returns all results, not filtered)
@@ -521,34 +523,40 @@ def get_react_iteration_prompt(
     # Build the scratchpad (observation history)
     scratchpad = ""
     if previous_searches:
+        # First, add an explicit DO NOT search list to prevent LLM from suggesting duplicates
+        scratchpad += f"\n{'='*80}\n🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT:\n"
+        for i, params in enumerate(search_parameters, 1):
+            search_type = params.get('search_type', 'hybrid')
+            query = params.get('query', '*')
+            filters = params.get('filters', '')
+            cve_ids = params.get('cve_ids', [])
+            ecosystems = params.get('ecosystems', [])
+            severity_levels = params.get('severity_levels', [])
+            vulnerability_types = params.get('vulnerability_types', [])
+            
+            scratchpad += f"\n❌ Search {i} ALREADY DONE - DO NOT REPEAT:\n"
+            scratchpad += f"  search_type='{search_type}', query='{query}'\n"
+            if filters:
+                scratchpad += f"  additional_filters='{filters}'\n"
+            if cve_ids:
+                scratchpad += f"  cve_ids={cve_ids}\n"
+            if ecosystems:
+                scratchpad += f"  ecosystems={ecosystems}\n"
+            if severity_levels:
+                scratchpad += f"  severity_levels={severity_levels}\n"
+            if vulnerability_types:
+                scratchpad += f"  vulnerability_types={vulnerability_types}\n"
+        
+        # Then show what was found
         scratchpad += f"\n{'='*80}\nSearch History ({len(previous_searches)} attempts):\n"
         for i, (search_type, query, results_count) in enumerate(previous_searches, 1):
             scratchpad += f"Observation {i}: Searched with {search_type} (query: '{query}') → Found {results_count} results\n"
         
-        # Add structured search parameters if available
-        if search_parameters:
-            scratchpad += f"\n{'='*80}\nSearch Parameters (for deduplication checking):\n"
-            for i, params in enumerate(search_parameters, 1):
-                scratchpad += f"\nSearch {i} Parameters:\n"
-                scratchpad += f"  - Type: {params.get('search_type', 'hybrid')}\n"
-                scratchpad += f"  - Query: '{params.get('query', '*')}'\n"
-                if params.get('filters'):
-                    scratchpad += f"  - Filters: {params.get('filters')}\n"
-                if params.get('cve_ids'):
-                    scratchpad += f"  - CVE IDs: {params.get('cve_ids')}\n"
-                if params.get('ecosystems'):
-                    scratchpad += f"  - Ecosystems: {params.get('ecosystems')}\n"
-                if params.get('severity_levels'):
-                    scratchpad += f"  - Severity Levels: {params.get('severity_levels')}\n"
-                if params.get('vulnerability_types'):
-                    scratchpad += f"  - Vulnerability Types: {params.get('vulnerability_types')}\n"
-                scratchpad += f"  - Results Found: {params.get('results_found', 0)}\n"
-        
-        # Add guidance about search deduplication
-        scratchpad += f"\n⚠️ SEARCH DEDUPLICATION:\n"
-        scratchpad += f"The searches above represent DISTINCT search attempts with different parameters.\n"
-        scratchpad += f"Each search had unique: query text, search_type, or filters.\n"
-        scratchpad += f"DO NOT repeat searches that are identical in core parameters (search_type, query, filters, constraints).\n"
+        # Add clear guidance
+        scratchpad += f"\n⚠️ DEDUPLICATION REMINDER:\n"
+        scratchpad += f"The '🚫 DO NOT REPEAT' list above shows exact search combinations that were already executed.\n"
+        scratchpad += f"If you propose ANY of these exact combinations, it WILL be skipped (wasting your iteration).\n"
+        scratchpad += f"INSTEAD: Propose a DIFFERENT search with changed: search_type, query, or filters.\n"
     
     # Add collected data summary
     scratchpad += f"\n{'='*80}\nData Collected So Far:\n"
@@ -623,7 +631,9 @@ MANDATORY RULES:
 2. If you have 1+ documents with advisory content → YOU MUST provide "Final Answer:"
 3. If you have aggregation data → YOU MUST provide "Final Answer:"
 4. DO NOT search again if you already have relevant data
-5. DO NOT repeat a search you already performed (check search history above)
+5. ⚠️ DO NOT repeat ANY search from the "🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT" list above
+   - If you suggest one anyway, it WILL be silently skipped (wasting your iteration)
+   - To try a new search, CHANGE: search_type, query, filters, or constraints
 6. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
 {("⚠️ THIS IS YOUR FINAL ITERATION - YOU CANNOT SEARCH ANYMORE. PROVIDE FINAL ANSWER WITH YOUR BEST SYNTHESIS OF COLLECTED DATA.") if is_final_iteration else ""}
 
