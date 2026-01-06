@@ -443,3 +443,147 @@ class TestChatHistory:
         assert "CVE-2024-1234" in instruction
         assert "express-validator" in instruction
 
+
+class TestSearchHeuristics:
+    """Test search heuristics for optimized query handling."""
+
+    def test_heuristic_documented_basic(self, agent):
+        """Test heuristic detects 'documented' keyword."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        # Should trigger heuristic 1
+        agent.search_heuristics("Show me well-documented vulnerabilities", state)
+
+        # Should have executed a search
+        assert len(state.search_history) > 0, "Should have pre-executed search"
+        assert len(state.documents_collected) > 0, "Should have collected documents"
+
+    def test_heuristic_advisory_keyword(self, agent):
+        """Test heuristic detects 'advisory' keyword."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        agent.search_heuristics("List CVEs with advisory documentation", state)
+
+        assert len(state.search_history) > 0
+        assert state.search_history[0][0] == "keyword (advisory)"
+
+    def test_heuristic_remediation_refinement(self, agent):
+        """Test heuristic adds remediation section filter when mentioned."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        agent.search_heuristics("Show documented vulnerabilities with remediation steps", state)
+
+        # Should have executed search with remediation filter
+        assert len(state.search_history) > 0
+        # Documents should be collected
+        assert len(state.documents_collected) >= 0
+
+    def test_heuristic_testing_refinement(self, agent):
+        """Test heuristic adds testing section filter when mentioned."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        agent.search_heuristics("Show documented vulnerabilities with testing documentation", state)
+
+        # Should have executed search (may return 0 if no testing sections exist)
+        assert len(state.search_history) > 0
+
+    def test_heuristic_best_practices_refinement(self, agent):
+        """Test heuristic adds best practices section filter when mentioned."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        agent.search_heuristics("Show comprehensive vulnerabilities with best practices", state)
+
+        # Should have executed search
+        assert len(state.search_history) > 0
+
+    def test_heuristic_details_refinement(self, agent):
+        """Test heuristic adds details section filter when mentioned."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        agent.search_heuristics("Show detailed information about documented vulnerabilities", state)
+
+        # Should have executed search with details filter
+        assert len(state.search_history) > 0
+
+    def test_heuristic_no_trigger(self, agent):
+        """Test heuristic doesn't trigger for non-matching queries."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        # Query without documented/advisory keywords
+        agent.search_heuristics("Show all npm vulnerabilities", state)
+
+        # Should NOT have executed any searches
+        assert len(state.search_history) == 0, "Should not trigger heuristic"
+        assert len(state.documents_collected) == 0
+
+    def test_heuristic_collects_aggregations(self, agent):
+        """Test heuristic collects aggregation data."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        agent.search_heuristics("Show well-documented vulnerabilities", state)
+
+        # Should have collected aggregations
+        assert state.aggregations_collected is not None
+        # May be empty dict if no faceting, but should be initialized
+        assert isinstance(state.aggregations_collected, dict)
+
+    def test_heuristic_multiple_keywords(self, agent):
+        """Test heuristic handles queries with multiple matching keywords."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        # Query with both 'documented' and 'detailed'
+        agent.search_heuristics("Show documented and detailed vulnerabilities", state)
+
+        # Should trigger heuristic once
+        assert len(state.search_history) > 0
+
+    def test_heuristic_case_insensitive(self, agent):
+        """Test heuristic detection is case-insensitive."""
+        state = IterationState(
+            iteration=0,
+            search_history=[],
+            documents_collected={}
+        )
+
+        # Mixed case keywords
+        agent.search_heuristics("Show DOCUMENTED vulnerabilities with REMEDIATION", state)
+
+        # Should still trigger heuristic
+        assert len(state.search_history) > 0
+

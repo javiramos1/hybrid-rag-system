@@ -24,7 +24,7 @@ Chunking Strategy (Section-Aware):
   - Split advisories by ## markdown headers (natural semantic boundaries)
   - Preserve entire code blocks intact (never split mid-code)
   - Split text-only sections at sentence boundaries (~500 chars per chunk)
-  - Each chunk tagged with section type (summary, remediation, code_example, etc.)
+  - Each chunk tagged with section type (summary, remediation, testing, best_practices, details)
   - Result: ~60-80 advisory chunks total, each with separate embedding
 """
 
@@ -103,13 +103,14 @@ def parse_advisories(task_dir: Path) -> list[dict]:
 
     For each advisory (8 total):
       1. Extract CVE ID and metadata from header
-      2. Split by ## section headers (semantic boundaries: Summary, Remediation, Code Examples, etc.)
+      2. Split by ## section headers (semantic boundaries: Summary, Remediation, Details, etc.)
       3. For sections with code blocks (```): keep entire section intact (never split mid-code)
       4. For text-only sections: split at sentence boundaries (~500 chars per chunk)
-      5. Tag each chunk with section type (summary, remediation, code_example, attack, cvss, details)
+      5. Tag each chunk with section type (summary, remediation, details)
     
     Returns list of ~60-80 chunk dicts {cve_id, content, section, is_code, package_name, ...}
     Each chunk will be embedded separately for semantic search.
+    Sections with code blocks are marked with is_code=true for filtering.
     """
     advisories_dir = task_dir / "advisories"
     all_chunks = []
@@ -218,25 +219,31 @@ def _extract_metadata(content: str) -> dict:
 def _categorize_section(title: str) -> str:
     """Categorize advisory section by keywords for faceted search and analytics.
     
-    Maps markdown section headers to semantic categories, enabling:
-      - Faceted search: Find all "remediation" or "code_example" sections across CVEs
-      - Analytics: Count vulnerability types by section (how many have code examples?)
-      - Targeted retrieval: "Show me attack vectors" retrieves only attack sections
+    Maps markdown section headers to semantic categories based on actual data.
+    Current sections in the 8 advisory documents:
+      - summary: High-level vulnerability overview
+      - remediation: How to fix or mitigate the vulnerability
+      - testing: Testing procedures and verification steps
+      - best_practices: Security best practices and recommendations
+      - details: Technical details, references, credits (catch-all)
     
-    This is another advantage of structured search engines: query results can be
-    filtered and aggregated by semantic type, not just keyword or vector similarity.
+    This enables:
+      - Faceted search: Find all "remediation" or "testing" sections across CVEs
+      - Analytics: Measure documentation completeness (% with testing, best practices)
+      - Cross-dimensional queries: "Which ecosystem has best testing coverage?"
+      - Targeted retrieval: "Show me testing steps" retrieves only testing sections
+    
+    Note: Code blocks are marked with is_code=true within any section, not a separate section type.
     """
     title_lower = title.lower()
     if "summary" in title_lower or "overview" in title_lower:
         return "summary"
     elif "remediat" in title_lower or "fix" in title_lower:
         return "remediation"
-    elif "attack" in title_lower or "exploit" in title_lower:
-        return "attack"
-    elif "code" in title_lower or "example" in title_lower:
-        return "code_example"
-    elif "cvss" in title_lower:
-        return "cvss"
+    elif "test" in title_lower:
+        return "testing"
+    elif "best practice" in title_lower:
+        return "best_practices"
     return "details"
 
 
@@ -290,7 +297,7 @@ def create_typesense_collection(client: typesense.Client) -> None:
       - has_advisory: boolean flag (8 CVEs have advisories, 39 don't)
       - advisory_chunks: nested array of {content, section, is_code, index, embedding}
     
-    Nested chunks enable rich search: find CVEs by advisory section (remediation, code_example, etc.)
+    Nested chunks enable rich search: find CVEs by advisory section (remediation, testing, best_practices, etc.)
     without creating 95 top-level documents. Analytics report 47 CVEs, not 95.
     """
     logger.info("Creating Typesense collection...")
@@ -326,7 +333,7 @@ def create_typesense_collection(client: typesense.Client) -> None:
                     {
                         "name": "section",
                         "type": "string",
-                    },  # summary, remediation, code_example, etc.
+                    },  # summary, remediation, testing, best_practices, details
                     {"name": "is_code", "type": "bool"},  # Code block marker
                     {"name": "index", "type": "int32"},  # Chunk index within advisory
                     {"name": "embedding", "type": "float[]", "num_dim": 384},  # Chunk embedding

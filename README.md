@@ -165,7 +165,7 @@ CVE Document (47 total):
 └── Nested advisory_chunks: [
     ├── chunk 1: {section: "summary", content: "...", embedding: [...]}
     ├── chunk 2: {section: "remediation", content: "...", embedding: [...]}
-    └── chunk 3: {section: "code_example", content: "...", embedding: [...]}
+    └── chunk 3: {section: "testing", content: "...", embedding: [...]}
 ]
 ```
 
@@ -359,7 +359,7 @@ Each CVE is a single document containing:
 - **Embedding**: Generated from CSV description
 - **Nested advisory_chunks**: Array of objects containing:
   - `content`: Chunk text (preserves code blocks intact)
-  - `section`: Semantic category (summary, remediation, code_example, etc.)
+  - `section`: Semantic category (summary, remediation, testing, best_practices, details)
   - `is_code`: Boolean flag for code block preservation
   - `index`: Position within the advisory
   - `embedding`: Separate embedding for semantic search
@@ -397,7 +397,7 @@ For 8 well-structured advisory documents, simple section-based chunking gives us
 - **Analytics integrity**: 47 CVE documents total (not 95+ separate chunks)
 - **Code preservation**: Entire code examples remain searchable as units
 - **Semantic search**: Separate embeddings for CSV metadata and advisory chunks
-- **Section awareness**: Chunks tagged by type (summary, remediation, attack_vector, code_example, etc.)
+- **Section awareness**: Chunks tagged by type (summary, remediation, testing, best_practices, details)
 - **Context preserved**: No mid-sentence or mid-code splits
 
 **Real-world chunking results:**
@@ -406,6 +406,49 @@ For 8 well-structured advisory documents, simple section-based chunking gives us
 - Code sections: Kept whole (some 800+ chars for full examples)
 - Text sections: 200-500 chars each, complete sentences
 - Each chunk knows: CVE ID, section type, whether it contains code
+
+### Section categories and filtering
+
+Advisory chunks are tagged with **5 semantic section types** for precise filtering and analytics:
+
+| Section Type | Description | Filter Syntax |
+| ------------- | ------------- | --------------- |
+| `summary` | Overview and description | `advisory_chunks.{section:=summary}` |
+| `remediation` | Fix steps and patches | `advisory_chunks.{section:=remediation}` |
+| `testing` | Verification and test procedures | `advisory_chunks.{section:=testing}` |
+| `best_practices` | Security recommendations | `advisory_chunks.{section:=best_practices}` |
+| `details` | Attack vectors, technical details | `advisory_chunks.{section:=details}` |
+
+**Usage examples:**
+
+```python
+# Find CVEs with testing documentation
+search_vulnerabilities(
+    query="*", 
+    search_type="keyword",
+    additional_filters="advisory_chunks.{section:=testing}"
+)
+
+# Analyze documentation completeness by ecosystem
+search_vulnerabilities(
+    query="*",
+    search_type="keyword", 
+    facet_by="ecosystem,advisory_chunks.section"
+)
+
+# Multi-section filtering (remediation AND testing)
+additional_filters="advisory_chunks.{section:=remediation} && advisory_chunks.{section:=testing}"
+```
+
+**Metadata fields for faceting:**
+
+- `ecosystem`: npm, pypi, maven, etc.
+- `severity`: Critical, High, Medium, Low
+- `has_advisory`: true/false (8 CVEs have detailed advisories)
+- `vulnerability_type`: SQL Injection, XSS, etc.
+- `advisory_chunks.section`: The 5 section types above
+- `advisory_chunks.is_code`: true/false (code block presence)
+
 
 ## Features & requirements met
 

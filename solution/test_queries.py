@@ -205,6 +205,73 @@ def test_queries():
             "query": "Find all High severity vulnerabilities affecting npm and explain how to patch them",
             "expect": "Hybrid: Filter severity=['High'] AND ecosystems=['npm'] (CSV). Retrieve advisory patching and upgrade guidance."
         },
+        
+        # ========== NEW: Testing Section-Specific Queries ==========
+        {
+            "type": "HYBRID (Testing Documentation)",
+            "query": "Show me vulnerabilities with testing documentation and verification steps",
+            "expect": "Hybrid: Filter has_advisory=true AND advisory_chunks.section=testing. Retrieve CVEs with testing procedures."
+        },
+        {
+            "type": "HYBRID (Best Practices)",
+            "query": "Which vulnerabilities have security best practices documented?",
+            "expect": "Hybrid: Filter has_advisory=true AND advisory_chunks.section=best_practices. Retrieve CVEs with security recommendations."
+        },
+        {
+            "type": "HYBRID (Remediation + Testing)",
+            "query": "Show critical vulnerabilities with both remediation steps and testing procedures",
+            "expect": "Hybrid: Filter severity=['Critical'] AND has_advisory=true. Retrieve advisories with remediation and testing sections."
+        },
+        {
+            "type": "HYBRID (Documentation Completeness)",
+            "query": "Which npm vulnerabilities have comprehensive documentation including testing and best practices?",
+            "expect": "Hybrid: Filter ecosystems=['npm'] AND has_advisory=true. Check for advisories with multiple section types."
+        },
+        {
+            "type": "UNSTRUCTURED-ONLY (Testing Procedures)",
+            "query": "How do I test if my application is vulnerable to SQL injection?",
+            "expect": "Semantic search for 'SQL injection testing procedures verification'. Retrieves advisory testing guidance."
+        },
+        {
+            "type": "UNSTRUCTURED-ONLY (Best Practices)",
+            "query": "What are the security best practices for preventing XSS attacks?",
+            "expect": "Semantic search for 'XSS prevention best practices security recommendations'. Retrieves advisory best practices content."
+        },
+        {
+            "type": "STRUCTURED-ONLY (Documentation Coverage)",
+            "query": "How many CVEs have detailed advisory documentation with testing procedures?",
+            "expect": "Keyword search with facet_by='advisory_chunks.section'. Counts CVEs with testing section documentation."
+        },
+        {
+            "type": "HYBRID (Multi-Section Filter)",
+            "query": "Show all Critical vulnerabilities with comprehensive advisories including remediation, testing, and best practices",
+            "expect": "Hybrid: Filter severity=['Critical'] AND has_advisory=true with multiple section checks. Returns well-documented CVEs."
+        },
+        {
+            "type": "HYBRID (Heuristic: Testing Detection)",
+            "query": "How do I test and verify if my application is affected by SQL injection vulnerabilities?",
+            "expect": "Heuristic: Detects 'test/testing' keyword → filters advisory_chunks.section=testing. Returns testing procedures for SQL injection."
+        },
+        {
+            "type": "HYBRID (Heuristic: Best Practices Detection)",
+            "query": "What are the best practices and secure coding recommendations for preventing XSS attacks?",
+            "expect": "Heuristic: Detects 'best practice/recommendation' keyword → filters advisory_chunks.section=best_practices. Returns security best practices."
+        },
+        {
+            "type": "HYBRID (Heuristic: Remediation Detection)",
+            "query": "How do I fix and remediate authentication bypass vulnerabilities?",
+            "expect": "Heuristic: Detects 'fix/remediate' keyword → filters advisory_chunks.section=remediation. Returns remediation steps."
+        },
+        {
+            "type": "STRUCTURED-ONLY (Advisory Coverage Analysis)",
+            "query": "What percentage of vulnerabilities have testing documentation, remediation guidance, and best practices sections?",
+            "expect": "Keyword: query='*', facet_by='advisory_chunks.section,has_advisory'. Calculates coverage percentage across section types."
+        },
+        {
+            "type": "HYBRID (Section + Severity Analysis)",
+            "query": "Show all npm Critical vulnerabilities that have both testing procedures and best practices documented",
+            "expect": "Hybrid: Filter ecosystems=['npm'] AND severity=['Critical'] AND has_advisory=true. Check for testing AND best_practices sections."
+        },
     ]
     
     # Run each test case
@@ -240,9 +307,16 @@ def test_queries():
     
     print("\n📊 Test Coverage:")
     print("  ✓ 12 STRUCTURED-ONLY queries (CSV filtering, aggregation, aliases, multi-filters)")
-    print("  ✓ 8 UNSTRUCTURED-ONLY queries (Vector search for explanations/remediation/examples)")
-    print("  ✓ 10 HYBRID queries (Combined structured + unstructured with various combinations)")
-    print(f"  ✓ Total: {len(test_cases)} queries tested")
+    print("  ✓ 10 UNSTRUCTURED-ONLY queries (Vector search for explanations/remediation/examples)")
+    print("  ✓ 22 HYBRID queries (Combined structured + unstructured with various combinations)")
+    print("  ✓ Total: {len(test_cases)} queries tested")
+    print("\n🎯 Additional Coverage:")
+    print("  ✓ Section-specific queries (testing, best_practices, remediation, details)")
+    print("  ✓ Heuristic detection (testing/best practices/remediation keywords)")
+    print("  ✓ Section filtering with advisory_chunks syntax")
+    print("  ✓ Documentation completeness analysis")
+    print("  ✓ Multi-section filtering")
+    print("  ✓ Advisory content analytics")
     
     print("\n🎯 Data Source:")
     print("  • 47 CVE documents (one per unique CVE)")

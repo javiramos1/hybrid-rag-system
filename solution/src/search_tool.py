@@ -222,7 +222,7 @@ class VulnerabilitySearchTool:
             vulnerability_types: Filter by vulnerability type (XSS, SQL Injection, RCE, etc.)
             min_cvss_score: Minimum CVSS score threshold
             additional_filters: Raw Typesense filter expression for advanced filtering.
-                Examples: "cvss_score:<=9.0", "advisory_chunks.section:code_example",
+                Examples: "cvss_score:<=9.0", "advisory_chunks.{section:=testing}",
                 "published_date:>=2024-01-01", "package_name:express-validator",
                 "has_advisory:true" (filter to CVEs with detailed advisory documentation)
             facet_by: Comma-separated field names for aggregation/faceting.
@@ -254,6 +254,7 @@ class VulnerabilitySearchTool:
                 "vulnerability_types": vulnerability_types,
                 "min_cvss_score": min_cvss_score,
                 "cve_ids": cve_ids,
+                "additional_filters": additional_filters,
                 "sort_by": sort_by,
                 "hybrid_search_alpha": hybrid_search_alpha,
                 "facet_by": facet_by,

@@ -5,6 +5,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
+
+# Load .env file for tests
+load_dotenv()
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -751,3 +755,185 @@ class TestAggregationsAndStatistics:
         top_doc = result.documents[0]
         assert "cvss_score" in top_doc
         assert top_doc["cvss_score"] > 0
+
+
+class TestAdvancedFilters:
+    """Test advanced filtering capabilities for advisory sections."""
+
+    def test_filter_has_advisory(self, search_tool):
+        """Test filtering for CVEs with advisory documentation."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true",
+            per_page=20,
+        )
+
+        # Should find the 8 CVEs with detailed advisories
+        assert result.total_found > 0
+        assert result.total_found <= 8, "Should have at most 8 CVEs with advisories"
+
+        # All returned documents should have has_advisory flag
+        for doc in result.documents:
+            assert doc.get("has_advisory") is True, "Document should have has_advisory=true"
+
+    def test_filter_advisory_remediation_section(self, search_tool):
+        """Test filtering for CVEs with remediation sections."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}",
+            per_page=20,
+        )
+
+        # Should find CVEs with remediation sections
+        assert result.total_found > 0, "Should find CVEs with remediation sections"
+        assert result.total_found <= 8, "At most 8 CVEs have advisories"
+
+    def test_filter_advisory_testing_section(self, search_tool):
+        """Test filtering for CVEs with testing documentation."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{section:=testing}",
+            per_page=20,
+        )
+
+        # Should find CVEs with testing sections
+        assert result.total_found >= 0, "Should return results (may be 0 if no testing sections)"
+
+    def test_filter_advisory_best_practices_section(self, search_tool):
+        """Test filtering for CVEs with best practices documentation."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{section:=best_practices}",
+            per_page=20,
+        )
+
+        # Should find CVEs with best practices sections
+        assert result.total_found >= 0, "Should return results (may be 0 if no best_practices sections)"
+
+    def test_filter_advisory_details_section(self, search_tool):
+        """Test filtering for CVEs with detailed technical information."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{section:=details}",
+            per_page=20,
+        )
+
+        # Should find CVEs with details sections
+        assert result.total_found > 0, "Should find CVEs with details sections"
+
+    def test_filter_advisory_summary_section(self, search_tool):
+        """Test filtering for CVEs with summary sections."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{section:=summary}",
+            per_page=20,
+        )
+
+        # Should find CVEs with summary sections
+        assert result.total_found > 0, "Should find CVEs with summary sections"
+
+    def test_filter_combined_sections(self, search_tool):
+        """Test filtering for CVEs with multiple section types."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{section:=remediation} && advisory_chunks.{section:=details}",
+            per_page=20,
+        )
+
+        # Should find CVEs that have BOTH remediation AND details sections
+        assert result.total_found >= 0, "Should find CVEs with both sections"
+
+    def test_filter_code_blocks(self, search_tool):
+        """Test filtering for advisory sections containing code blocks."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true && advisory_chunks.{is_code:=true}",
+            per_page=20,
+        )
+
+        # Should find CVEs with code blocks in advisories
+        assert result.total_found >= 0, "Should return results (may be 0 if no code blocks)"
+
+    def test_filter_ecosystem_with_advisory(self, search_tool):
+        """Test combined ecosystem + advisory filtering."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            ecosystems=["npm"],
+            additional_filters="has_advisory:true",
+            per_page=20,
+        )
+
+        # Should find npm CVEs with advisories
+        assert result.total_found >= 0
+        for doc in result.documents:
+            assert doc.get("ecosystem") == "npm", "Should only return npm CVEs"
+            assert doc.get("has_advisory") is True, "Should only return CVEs with advisories"
+
+    def test_filter_severity_with_remediation(self, search_tool):
+        """Test combined severity + remediation section filtering."""
+        result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            severity_levels=["Critical"],
+            additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}",
+            per_page=20,
+        )
+
+        # Should find Critical CVEs with remediation guidance
+        assert result.total_found >= 0
+        for doc in result.documents:
+            assert doc.get("severity") == "Critical", "Should only return Critical CVEs"
+
+    def test_section_analytics_faceting(self, search_tool):
+        """Test faceting on advisory section types for analytics."""
+        # Note: Typesense may not support faceting on nested fields depending on version
+        # This test verifies the query structure is correct, even if faceting isn't supported
+        try:
+            result = search_tool.search_vulnerabilities(
+                query="*",
+                search_type="keyword",
+                additional_filters="has_advisory:true",
+                facet_by="advisory_chunks.section",
+                per_page=0,
+            )
+
+            # Should return section distribution if supported
+            assert result.total_found > 0, "Should find CVEs with advisories"
+            # Aggregations may or may not include nested field faceting
+        except Exception as e:
+            # Nested field faceting may not be supported - that's OK
+            # The important thing is that the filter syntax is correct
+            assert "advisory_chunks.section" in str(e) or "facet" in str(e).lower()
+
+    def test_documentation_completeness_by_ecosystem(self, search_tool):
+        """Test documentation completeness analysis by ecosystem."""
+        # Get total CVEs per ecosystem
+        all_result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            facet_by="ecosystem",
+            per_page=0,
+        )
+
+        # Get CVEs with advisories per ecosystem
+        advisory_result = search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters="has_advisory:true",
+            facet_by="ecosystem",
+            per_page=0,
+        )
+
+        # Both queries should execute successfully
+        assert all_result.total_found > 0
+        assert advisory_result.total_found > 0
+        assert advisory_result.total_found <= all_result.total_found

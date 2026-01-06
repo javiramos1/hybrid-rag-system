@@ -84,6 +84,7 @@ class IterationState:
     iteration: int
     search_history: list  # List of (search_type, query, results_count)
     documents_collected: dict  # CVE ID -> document, for deduplication
+    search_parameters: list = field(default_factory=list)  # Full search parameters for each search (used for dedup + LLM visibility)
     aggregations_collected: dict = None  # Field name -> aggregation data (optional, defaults to empty dict)
     question_embedding: Optional[List[float]] = None  # Cached embedding of original question
     final_answer: Optional[str] = None
@@ -121,33 +122,70 @@ class VulnerabilityAgent:
         suggestions and optimizations. The agent remains the decision-maker and can override
         these strategies if they don't yield results or don't match the query intent.
         
-        Current heuristics:
-        - "well-documented + code + remediation" → advisory chunk filter search
-          (targets CVEs with detailed documentation, code examples, and remediation steps)
+        Current heuristic:
+        - "documented/advisory/detailed" → filter to CVEs with advisory chunks
+          - Optional refinement: if query also mentions specific section keywords,
+            further filter to that section (e.g., "remediation", "details")
+        
+        Filter Syntax:
+        - Typesense nested array filtering uses: field.{filter_conditions}
+        - Example: "advisory_chunks.{section:=remediation}" filters nested chunks
         
         Args:
             user_question: The user's original query
             state: Iteration state to update with pre-collected results
         """
         q_lower = user_question.lower()
-        has_documented = any(w in q_lower for w in ["well-documented", "well documented", "documented"])
-        has_code = any(w in q_lower for w in ["code", "example", "implementation"])
-        has_remediation = any(w in q_lower for w in ["remediation", "fix", "solution"])
         
-        # Heuristic 1: Well-documented vulnerabilities with code and remediation
-        if has_documented and has_code and has_remediation:
-            logger.info("📋 HEURISTIC: Well-documented + code + remediation pattern detected")
-            logger.info("   → Pre-executing advisory chunk filter search to boost precision")
+        # Check for documentation/advisory requests
+        has_documented = any(w in q_lower for w in [
+            "well-documented", "well documented", "documented", 
+            "advisory", "detailed", "comprehensive"
+        ])
+        
+        # Check for specific section interests (optional refinements)
+        has_remediation = any(w in q_lower for w in ["remediation", "fix", "solution", "mitigation"])
+        has_testing = any(w in q_lower for w in ["testing", "test cases", "test case", "verification", "how to test"])
+        has_best_practices = any(w in q_lower for w in ["best practice", "recommendation", "secure coding", "security best"])
+        has_details = any(w in q_lower for w in ["detail", "information", "overview", "vulnerability details"])
+        
+        # Heuristic: Query mentions documented/advisory content
+        # Generalized to cover any "documented" query, with optional section refinement
+        if has_documented:
+            logger.info("📋 HEURISTIC 1: Documented/advisory content pattern detected")
+            logger.info("   → Pre-executing advisory filter search to boost precision")
+            
+            # Build filter: base requirement is CVEs with advisory chunks
+            base_filter = "has_advisory:true"
+            
+            # Optional refinement: if query also mentions a specific section type, add it
+            section_filter = None
+            if has_remediation:
+                section_filter = "advisory_chunks.{section:=remediation}"
+                logger.info("   → Further filtering to remediation sections")
+            elif has_testing:
+                section_filter = "advisory_chunks.{section:=testing}"
+                logger.info("   → Further filtering to testing sections")
+            elif has_best_practices:
+                section_filter = "advisory_chunks.{section:=best_practices}"
+                logger.info("   → Further filtering to best practices sections")
+            elif has_details:
+                section_filter = "advisory_chunks.{section:=details}"
+                logger.info("   → Further filtering to detail sections")
+            
+            # Combine filters
+            additional_filters = f"{base_filter} && {section_filter}" if section_filter else base_filter
             
             result = self.search_tool.search_vulnerabilities(
                 query="*",
                 search_type="keyword",
-                additional_filters="has_advisory:true && advisory_chunks.section:code_example && advisory_chunks.section:remediation",
+                additional_filters=additional_filters,
                 facet_by="vulnerability_type,severity,ecosystem",
                 per_page=20
             )
             
-            state.search_history.append(("keyword (advisory filters)", "*", result.total_found))
+            facet_str = "vulnerability_type,severity,ecosystem" if not section_filter else "vulnerability_type,severity"
+            state.search_history.append((f"keyword (advisory)", "*", result.total_found))
             state.aggregations_collected = result.aggregations or {}
             
             if result.documents:
@@ -155,7 +193,7 @@ class VulnerabilityAgent:
                     cve_id = doc.get("cve_id") or doc.get("id")
                     state.documents_collected[cve_id] = doc
             
-            logger.info(f"✅ Heuristic search: {result.total_found} CVEs found")
+            logger.info(f"✅ Heuristic search: {result.total_found} CVEs with detailed advisories found")
 
     def answer_question(self, user_question: str) -> str:
         """Answer user question using ReAct pattern (Reasoning + Acting).
@@ -209,6 +247,7 @@ class VulnerabilityAgent:
                     state.search_history,
                     state.documents_collected,  # Pass actual documents
                     state.aggregations_collected,  # Pass actual aggregations
+                    search_parameters=state.search_parameters,  # Pass search parameters for clarity
                     is_final_iteration=is_final_iteration  # Signal final iteration
                 )
 
@@ -260,6 +299,45 @@ class VulnerabilityAgent:
         logger.info(f"\n✅ Final answer ({len(result)} chars)\n\n")
         return result
 
+    def _get_search_signature(self, args_dict: dict) -> tuple:
+        """Generate signature for search parameters to detect duplicates.
+        
+        Signature includes core search logic (type, query, filters, constraints)
+        but excludes refinement parameters (facet_by, per_page) which can vary
+        without constituting a true duplicate search.
+        
+        Args:
+            args_dict: Dictionary of search arguments
+            
+        Returns:
+            Hashable tuple representing core search parameters
+        """
+        return (
+            args_dict.get("search_type", "hybrid"),
+            args_dict.get("query", "*"),
+            args_dict.get("additional_filters", ""),
+            tuple(sorted(args_dict.get("cve_ids", []) or [])),
+            tuple(sorted(args_dict.get("ecosystems", []) or [])),
+            tuple(sorted(args_dict.get("severity_levels", []) or [])),
+            tuple(sorted(args_dict.get("vulnerability_types", []) or [])),
+        )
+
+    def _is_duplicate_search(self, search_sig: tuple, state: IterationState) -> bool:
+        """Check if search signature matches any previous searches.
+        
+        Args:
+            search_sig: Signature tuple from _get_search_signature()
+            state: Iteration state containing previous search parameters
+            
+        Returns:
+            True if this signature was already searched, False if new search
+        """
+        for prev_params in state.search_parameters:
+            prev_sig = self._get_search_signature(prev_params)
+            if prev_sig == search_sig:
+                return True
+        return False
+
     def _execute_search_and_collect(self, function_call, state: IterationState) -> None:
         """Execute search and collect documents/aggregations into state.
         
@@ -267,8 +345,21 @@ class VulnerabilityAgent:
             function_call: LLM function call with search arguments
             state: Current iteration state to update with search results
         """
-        # Execute search with cached question embedding for performance
+        # Parse search arguments
         args_dict = dict(function_call.args) if function_call.args else {}
+        
+        # Check for duplicate search before executing
+        search_sig = self._get_search_signature(args_dict)
+        if self._is_duplicate_search(search_sig, state):
+            logger.warning(
+                f"⏭️  Skipping duplicate search: {args_dict.get('search_type', 'hybrid')} / "
+                f"query='{args_dict.get('query', '*')}' / "
+                f"filters='{args_dict.get('additional_filters', '')}' "
+                f"(Already searched in previous iteration)"
+            )
+            return
+        
+        # Execute search with cached question embedding for performance
         args_dict["query_embedding"] = state.question_embedding
         
         search_result = self.search_tool.search_vulnerabilities(**args_dict)
@@ -281,6 +372,18 @@ class VulnerabilityAgent:
                 search_result.total_found,
             )
         )
+        
+        # Track full search parameters for deduplication and LLM visibility
+        state.search_parameters.append({
+            "search_type": args_dict.get("search_type", "hybrid"),
+            "query": args_dict.get("query", "*"),
+            "filters": args_dict.get("additional_filters", ""),
+            "cve_ids": args_dict.get("cve_ids", []),
+            "ecosystems": args_dict.get("ecosystems", []),
+            "severity_levels": args_dict.get("severity_levels", []),
+            "vulnerability_types": args_dict.get("vulnerability_types", []),
+            "results_found": search_result.total_found,
+        })
 
         # Collect unique documents
         if search_result.documents:
