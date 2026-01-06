@@ -142,9 +142,42 @@ I evaluated four major search approaches:
 **Why Typesense wins:**
 
 - **Native Hybrid Search**: Single query combines BM25 (keyword) + vector similarity with automatic rank fusion. No manual result merging.
-- **One Document, Dual-Indexed**: All data in one Typesense collection with both keyword and vector indexes. No metadata duplication.
+- **One Document, Dual-Indexed**: All data in one Typesense collection with both keyword and vector indexes. No metadata duplication. Vector search includes two embedding levels: (1) 47 CSV embeddings (CVE descriptions) for full-dataset semantic coverage, and (2) ~60-80 nested advisory chunk embeddings for fine-grained search within the 8 CVEs that have detailed advisories.
 - **Simple API**: One function call handles keyword search, vector search, filtering, and aggregations.
 - **Production Pattern**: Mirrors how organizations use Elasticsearch—proven architecture.
+
+#### CVE Document Structure in Typesense
+
+Each CVE is a single denormalized document with both structured metadata and nested advisory content:
+
+```text
+CVE Document (47 total):
+├── Top-level fields (searchable)
+│   ├── cve_id: "CVE-2024-1234"
+│   ├── package_name: "express-validator"
+│   ├── ecosystem: "npm"
+│   ├── severity: "Critical"
+│   ├── affected_versions: ["1.0.0", "1.0.1"]
+│   ├── fixed_version: "1.0.2"
+│   ├── content: "Description from CSV"
+│   └── embedding: [0.123, -0.456, ...]          ← CSV description embedding
+│
+└── Nested advisory_chunks: [
+    ├── chunk 1: {section: "summary", content: "...", embedding: [...]}
+    ├── chunk 2: {section: "remediation", content: "...", embedding: [...]}
+    └── chunk 3: {section: "code_example", content: "...", embedding: [...]}
+]
+```
+
+#### When Vector Search Is Used
+
+| Query Type | CSV Embedding | Advisory Embedding | How It Works |
+| --- | --- | --- | --- |
+| **Keyword (BM25)** | ❌ Not used | ❌ Not used | Pure text matching on all fields (BM25 relevance scoring) |
+| **Semantic (Vector)** | ✅ Searched | ✅ Searched | Encodes query to embedding, finds nearest neighbors in both top-level embedding field AND nested advisory_chunks.embedding |
+| **Hybrid** | ✅ Searched | ✅ Searched | Combines BM25 keyword matching + vector similarity with automatic rank fusion (alpha=0.5) |
+
+**Key insight:** Typesense automatically searches nested embeddings, so both CSV descriptions (for full coverage) and advisory chunks (for granularity) are indexed and queried together.
 
 **Why not the others:**
 

@@ -71,20 +71,24 @@ Supports three search types: keyword (metadata filtering/aggregations), semantic
                 },
                 "additional_filters": {
                     "type": "string",
-                    "description": "Raw Typesense filter expression (e.g., \"cvss_score:<=9.0\", \"has_advisory:true\"). See system instructions.",
+                    "description": """Raw Typesense filter expression for precise queries.
+
+ADVISORY CHUNK FILTERS: "has_advisory:true", "advisory_chunks.section:remediation", "advisory_chunks.section:code_example", "advisory_chunks.is_code:true"
+Combine with &&: "has_advisory:true && advisory_chunks.section:code_example && advisory_chunks.section:remediation"
+
+OTHER FILTERS: "cvss_score:>=8.0", "cvss_score:<=9.0"
+
+See system instructions for complete details and examples.
+""",
                 },
                 "facet_by": {
                     "type": "string",
                     "description": """Comma-separated field names for aggregation/counting. Returns stats (numeric fields) and counts (categorical fields).
-CRITICAL FOR COUNTING QUERIES: Use with per_page=0 to get aggregations only, query="*" for all documents.
 
-Examples:
-- "vulnerability_type" → Returns count of each type (for "how many types?")
-- "cvss_score" → Returns stats (avg/min/max) of CVSS scores
-- "ecosystem" → Returns count of vulnerabilities per ecosystem (npm/pip/maven)
-- "severity,vulnerability_type" → Returns both stats and counts
+Two methods: Standard fields ("vulnerability_type", "severity", "ecosystem", "cvss_score") or advisory chunks ("advisory_chunks.section", "has_advisory").
 
-See system instructions for detailed guidance on inventory/counting queries.""",
+Use with per_page=0 for aggregations only. See system instructions for complete details.
+""",
                 },
                 "per_page": {
                     "type": "integer",
@@ -177,6 +181,7 @@ You will use the standard ReAct format to iterate:
 ❌ ALWAYS decide: search or answer - no other options
 ❌ NEVER respond with "Action:", "Thought:", "Action Input:" text UNLESS you also provide "Final Answer:"
 
+
 STOPPING CONDITIONS (when to provide Final Answer):
 ✅ You have 1+ relevant documents collected from searches (SUFFICIENT for most queries)
 ✅ You have aggregation/statistics data (counts, averages, min/max CVSS)
@@ -213,6 +218,47 @@ Each CVE document contains:
 - Description: Brief description of the vulnerability
 - has_advisory: Boolean flag indicating if CVE has detailed advisory documentation (8 out of 47 CVEs)
 - Advisory Text: (if has_advisory=true) Detailed explanation, code examples, remediation steps, attack vectors
+
+NESTED ADVISORY CHUNKS:
+Each advisory is split into SEMANTIC SECTIONS, each queryable independently:
+- advisory_chunks.section: One of [summary, remediation, code_example, attack, cvss, details]
+- advisory_chunks.is_code: Boolean (true if section contains code blocks)
+
+USE FILTERS FOR WELL-DOCUMENTED QUERIES - CRITICAL EXPLANATION:
+
+⚠️ **How Advisory Chunk Filters Work:**
+1. When you use additional_filters with "advisory_chunks.section:code_example", Typesense filters to ONLY return CVEs that have at least one chunk with section="code_example"
+2. When you combine filters with &&: "advisory_chunks.section:code_example && advisory_chunks.section:remediation", Typesense returns CVEs that have BOTH types of sections
+3. The has_advisory flag is a document-level boolean - use "has_advisory:true" to filter to only the 8 CVEs that have any advisory at all
+4. Combining has_advisory with section filters guarantees you get CVEs with rich advisory content
+
+✅ **Correct Usage Examples:**
+- "Show CVEs with code examples": additional_filters="advisory_chunks.section:code_example"
+- "Show CVEs with both code AND remediation": additional_filters="advisory_chunks.section:code_example && advisory_chunks.section:remediation"
+- "Show only CVEs that have advisories": additional_filters="has_advisory:true"
+- "Show well-documented with code examples": additional_filters="has_advisory:true && advisory_chunks.section:code_example && advisory_chunks.section:remediation"
+
+❌ **Common Mistakes:**
+- Using semantic search on "code examples" instead of filtering by section type (returns all results, not just code sections)
+- Using per_page=0 with per_page=20 (confusing - pick ONE: 0 for aggregations only, >0 for documents)
+- Forgetting to use additional_filters when user asks "well-documented" (they want FILTERED results, not semantic search)
+- Using facet_by instead of additional_filters (faceting counts, filters narrows results)
+
+✅ **Search Parameters for "Well-Documented" Queries:**
+- query="*" (get all documents matching filter)
+- search_type="keyword" (filtering doesn't need semantic matching)
+- additional_filters="has_advisory:true && advisory_chunks.section:code_example && advisory_chunks.section:remediation"
+- facet_by="vulnerability_type,severity" (show which types are well-documented)
+- per_page=20 (return actual documents so user can see them)
+
+FACET BY SECTION TYPE FOR COVERAGE ANALYSIS:
+- facet_by="has_advisory" → Count CVEs with/without advisories
+- facet_by="advisory_chunks.section" → Distribution of section types
+- Combine: facet_by="has_advisory,advisory_chunks.section" → Joint distribution
+
+QUERY EXAMPLE (user asks for "well-documented with code examples"):
+❌ DON'T: hybrid search for "code examples remediation" (returns all results)
+✅ DO: additional_filters="has_advisory:true && advisory_chunks.section:code_example && advisory_chunks.section:remediation"
 
 DATASET FACTS:
 - **Total CVE documents indexed**: 47 vulnerabilities

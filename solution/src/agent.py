@@ -110,6 +110,53 @@ class VulnerabilityAgent:
         self.search_tool = VulnerabilitySearchTool(config)
         logger.info(f"Initialized agent: {config}")
 
+    def search_heuristics(self, user_question: str, state: IterationState) -> None:
+        """Apply search heuristics to optimize initial strategy.
+        
+        This method detects specific query patterns and pre-executes targeted searches
+        to enhance the agent's capabilities. These are optional optimizations that help
+        the agent find relevant results faster and with better precision.
+        
+        IMPORTANT: These heuristics are NOT mandatory rules imposed on the agent. They are
+        suggestions and optimizations. The agent remains the decision-maker and can override
+        these strategies if they don't yield results or don't match the query intent.
+        
+        Current heuristics:
+        - "well-documented + code + remediation" → advisory chunk filter search
+          (targets CVEs with detailed documentation, code examples, and remediation steps)
+        
+        Args:
+            user_question: The user's original query
+            state: Iteration state to update with pre-collected results
+        """
+        q_lower = user_question.lower()
+        has_documented = any(w in q_lower for w in ["well-documented", "well documented", "documented"])
+        has_code = any(w in q_lower for w in ["code", "example", "implementation"])
+        has_remediation = any(w in q_lower for w in ["remediation", "fix", "solution"])
+        
+        # Heuristic 1: Well-documented vulnerabilities with code and remediation
+        if has_documented and has_code and has_remediation:
+            logger.info("📋 HEURISTIC: Well-documented + code + remediation pattern detected")
+            logger.info("   → Pre-executing advisory chunk filter search to boost precision")
+            
+            result = self.search_tool.search_vulnerabilities(
+                query="*",
+                search_type="keyword",
+                additional_filters="has_advisory:true && advisory_chunks.section:code_example && advisory_chunks.section:remediation",
+                facet_by="vulnerability_type,severity,ecosystem",
+                per_page=20
+            )
+            
+            state.search_history.append(("keyword (advisory filters)", "*", result.total_found))
+            state.aggregations_collected = result.aggregations or {}
+            
+            if result.documents:
+                for doc in result.documents:
+                    cve_id = doc.get("cve_id") or doc.get("id")
+                    state.documents_collected[cve_id] = doc
+            
+            logger.info(f"✅ Heuristic search: {result.total_found} CVEs found")
+
     def answer_question(self, user_question: str) -> str:
         """Answer user question using ReAct pattern (Reasoning + Acting).
 
@@ -142,6 +189,9 @@ class VulnerabilityAgent:
         # Get tool and system instruction with chat history
         tool = types.Tool(function_declarations=[get_search_tool_declaration()])
         system_instruction = get_system_instruction(chat_history=self.chat_history)
+
+        # Apply search heuristics: optimize initial search strategy
+        self.search_heuristics(user_question, state)
 
         # Main ReAct loop
         while state.iteration < self.config.max_react_iterations:
