@@ -10,7 +10,7 @@ Reviewer: Ignore this file for the purpose of the challenge, focus on the core l
 
 Supports two modes:
   - Interactive: python main.py (REPL with 'help', 'exit' commands)
-  - Single query: python main.py "your question here"
+  - Single query: python main.py "your question here" [--debug]
 """
 
 import sys
@@ -97,9 +97,15 @@ def interactive_mode(agent: VulnerabilityAgent) -> None:
 
             # Process query
             console.print("\n[yellow]🔍 Searching...[/yellow]\n")
-            answer = agent.answer_question(user_input)
-            console.print(Markdown(answer))
+            response = agent.answer_question(user_input)
+            console.print(Markdown(response.answer))
             console.print()
+            
+            # Ask if user wants to see debug information
+            show_debug = input("📊 Do you want to see the search results? (y/N): ").strip().lower()
+            if show_debug in ["y", "yes"]:
+                console.print(response.debug_info)
+                console.print()
 
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
@@ -108,11 +114,20 @@ def interactive_mode(agent: VulnerabilityAgent) -> None:
             print(f"\n❌ Error: {e}\n")
 
 
-def single_query_mode(agent: VulnerabilityAgent, question: str) -> None:
-    """Process a single query and exit."""
+def single_query_mode(agent: VulnerabilityAgent, question: str, show_debug: bool = False) -> None:
+    """Process a single query and exit.
+    
+    Args:
+        agent: VulnerabilityAgent instance
+        question: Question to answer
+        show_debug: Whether to show debug information
+    """
     try:
-        answer = agent.answer_question(question)
-        print(answer)
+        response = agent.answer_question(question)
+        print(response.answer)
+        
+        if show_debug and response.debug_info:
+            print(response.debug_info)
     except Exception as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -134,7 +149,15 @@ def main() -> None:
 
     # Initialize agent with config
     try:
-        agent = VulnerabilityAgent(config)
+        # Parse debug flags from command line if in single query mode
+        print_prompts = False
+        if len(sys.argv) > 1:
+            for arg in sys.argv[1:]:
+                if arg in ["--debug", "-d"]:
+                    print_prompts = True
+                    break
+        
+        agent = VulnerabilityAgent(config, debug=print_prompts)
     except ValueError as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
@@ -145,9 +168,23 @@ def main() -> None:
 
     # Route to single-query or interactive mode
     if len(sys.argv) > 1:
-        # Single query mode
-        question = " ".join(sys.argv[1:])
-        single_query_mode(agent, question)
+        # Single query mode - check for debug flag
+        show_debug = False
+        question_args = []
+        
+        for arg in sys.argv[1:]:
+            if arg in ["--debug", "-d"]:
+                show_debug = True
+            else:
+                question_args.append(arg)
+        
+        if not question_args:
+            print("❌ Error: No question provided")
+            print("Usage: python main.py 'your question' [--debug]")
+            sys.exit(1)
+        
+        question = " ".join(question_args)
+        single_query_mode(agent, question, show_debug=show_debug)
     else:
         # Interactive mode
         interactive_mode(agent)

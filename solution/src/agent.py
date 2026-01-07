@@ -78,6 +78,14 @@ class ChatMessage:
 
 
 @dataclass
+class AgentResponse:
+    """Response from vulnerability agent."""
+
+    answer: str
+    debug_info: Optional[str] = None
+
+
+@dataclass
 class IterationState:
     """Tracks state during ReAct iteration."""
 
@@ -88,6 +96,7 @@ class IterationState:
     aggregations_collected: dict = None  # Field name -> aggregation data (optional, defaults to empty dict)
     question_embedding: Optional[List[float]] = None  # Cached embedding of original question
     final_answer: Optional[str] = None
+    search_debug_info: Optional[str] = None  # Formatted debug information about searches
 
     def __post_init__(self):
         """Initialize mutable defaults after dataclass creation."""
@@ -98,13 +107,15 @@ class IterationState:
 class VulnerabilityAgent:
     """Query agent using ReAct pattern with Gemini function calling."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, debug: bool = False):
         """Initialize agent with ReAct capabilities.
 
         Args:
             config: Config instance with all settings (API keys, model names, etc.)
+            debug: If True, print debug information (iteration prompts, etc.)
         """
         self.config = config
+        self.debug = debug
         self.chat_history: List[ChatMessage] = []
 
         self.client = genai.Client(api_key=config.google_api_key)
@@ -208,7 +219,7 @@ class VulnerabilityAgent:
         else:
             logger.info(f"⚠️  Heuristic search found 0 results for {section_name} - agent will refine")
 
-    def answer_question(self, user_question: str) -> str:
+    def answer_question(self, user_question: str) -> AgentResponse:
         """Answer user question using ReAct pattern (Reasoning + Acting).
 
         Iteratively searches for information and synthesizes answers:
@@ -221,7 +232,7 @@ class VulnerabilityAgent:
             user_question: Natural language question
 
         Returns:
-            Synthesized answer with citations
+            AgentResponse with answer and debug information
         """
         logger.info("=" * 80)
         logger.info(f"Starting ReAct loop for: {user_question}")
@@ -263,6 +274,14 @@ class VulnerabilityAgent:
                     search_parameters=state.search_parameters,  # Pass search parameters for clarity
                     is_final_iteration=is_final_iteration  # Signal final iteration
                 )
+            
+            # Debug: Print iteration prompt if debug mode enabled
+            if self.debug:
+                print("\n" + "=" * 80)
+                print(f"🐛 DEBUG: Iteration {state.iteration} Prompt")
+                print("=" * 80)
+                print(prompt_content)
+                print("=" * 80 + "\n")
 
             # Ask LLM what to do next (search or answer)
             response = retry_with_backoff(
@@ -298,6 +317,9 @@ class VulnerabilityAgent:
 
         result = state.final_answer or "Could not generate answer."
         
+        # Generate debug information
+        state.search_debug_info = self._format_debug_info(state)
+        
         # Add to chat history and maintain max size
         self.chat_history.append(ChatMessage(
             user_question=user_question,
@@ -310,7 +332,85 @@ class VulnerabilityAgent:
         
         logger.info(f"Chat history size: {len(self.chat_history)}/{self.config.max_chat_history}")
         logger.info(f"\n✅ Final answer ({len(result)} chars)\n\n")
-        return result
+        return AgentResponse(answer=result, debug_info=state.search_debug_info)
+
+    def _format_debug_info(self, state: IterationState) -> str:
+        """Format search results and aggregations for display.
+        
+        Shows:
+        - Summary of all searches performed
+        - Documents collected (max 5 docs, 50 chars max for content field)
+        - All facets and stats (pretty printed)
+        
+        Args:
+            state: IterationState with collected data
+            
+        Returns:
+            Formatted debug information string
+        """
+        import json
+        
+        output = []
+        output.append("\n" + "=" * 80)
+        output.append("DEBUG: Search Results & Aggregations")
+        output.append("=" * 80)
+        
+        # Search history summary
+        output.append("\n📋 SEARCH HISTORY:")
+        for i, (search_type, query, total_found) in enumerate(state.search_history, 1):
+            output.append(f"  {i}. [{search_type}] query='{query}' → {total_found} results")
+        
+        # Documents collected (max 5 docs, with truncated fields)
+        output.append(f"\n📄 DOCUMENTS COLLECTED ({len(state.documents_collected)} total, showing up to 5):")
+        if state.documents_collected:
+            # Get first 5 documents
+            docs_to_show = dict(list(state.documents_collected.items())[:5])
+            
+            for cve_id, doc in docs_to_show.items():
+                output.append(f"\n  {cve_id}:")
+                
+                # Show all fields except embeddings
+                for field, value in doc.items():
+                    # Skip embeddings field
+                    if field == "question_embedding" or "embedding" in field.lower():
+                        continue
+                    
+                    # Special handling for 'content' field - show only 50 chars
+                    if field == "content" and isinstance(value, str):
+                        preview = value[:50] + ("..." if len(value) > 50 else "")
+                        output.append(f"    {field}: {preview}")
+                    # Handle text fields
+                    elif isinstance(value, str):
+                        output.append(f"    {field}: {value}")
+                    # Handle lists/dicts - compact format
+                    elif isinstance(value, (list, dict)):
+                        if isinstance(value, list) and len(value) > 0:
+                            output.append(f"    {field}: [{len(value)} item(s)]")
+                        elif isinstance(value, dict) and len(value) > 0:
+                            output.append(f"    {field}: {json.dumps(value)}")
+                        else:
+                            output.append(f"    {field}: {json.dumps(value)}")
+                    else:
+                        output.append(f"    {field}: {value}")
+            
+            if len(state.documents_collected) > 5:
+                output.append(f"\n  ... and {len(state.documents_collected) - 5} more documents")
+        else:
+            output.append("  (none)")
+        
+        # Aggregations (show all)
+        output.append(f"\n📊 AGGREGATIONS & STATS:")
+        if state.aggregations_collected:
+            for field, agg_data in state.aggregations_collected.items():
+                output.append(f"\n  {field}:")
+                agg_text = json.dumps(agg_data, indent=4)
+                for line in agg_text.split("\n"):
+                    output.append(f"    {line}")
+        else:
+            output.append("  (none)")
+        
+        output.append("\n" + "=" * 80)
+        return "\n".join(output)
 
     def _get_search_signature(self, args_dict: dict) -> tuple:
         """Generate signature for search parameters to detect duplicates.

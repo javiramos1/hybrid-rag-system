@@ -287,6 +287,22 @@ The agent maintains a conversation history that it uses intelligently:
 
 Example: User asks "What is CVE-2024-1234?" → Agent searches and answers. User then asks "What's the CVSS score of this?" → Agent checks history, sees CVE-2024-1234 was discussed, and answers directly from that context.
 
+## Debug Mode
+
+View search details and LLM decision-making:
+
+```bash
+make query Q="your question" D=1      # Shows search results, aggregations, and iteration prompts
+make run --debug                       # Interactive mode: after each answer, you're prompted to view search results
+```
+
+Debug output shows:
+
+- **Search history**: All queries executed, result counts
+- **Documents collected**: Relevant CVE records retrieved (max 5 shown)
+- **Aggregations & stats**: Counts, averages, facets used to answer the question
+- **Iteration prompts** (D=1 only): Raw LLM prompts for each iteration—useful for understanding why the agent searched or answered
+
 ## Troubleshooting (common issues)
 
 - Typesense not running: `make docker-up` then `make docker-logs` to inspect logs. Use `make docker-down` then `make docker-up` to restart.

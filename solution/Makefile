@@ -40,6 +40,7 @@ help: ## Show this help message
 	@echo "  make ingest            Run data ingestion pipeline"
 	@echo "  make run               Run interactive CLI"
 	@echo "  make query Q='...'     Run single query (e.g., make query Q='explain SQL injection')"
+	@echo "  make query Q='...' D=1 Run single query with debug info (add D=1 flag)"
 	@echo ""
 	@echo "$(GREEN)Documentation:$(NC)"
 	@echo "  make docs              Open Typesense documentation"
@@ -174,10 +175,10 @@ run: docker-up ## Run interactive CLI
 	fi; \
 	$(VENV_PYTHON) main.py
 
-query: docker-up ## Run single query (usage: make query Q='your question')
+query: docker-up ## Run single query (usage: make query Q='your question' [D=1 for debug])
 	@if [ -z "$(Q)" ]; then \
 		echo "$(RED)✗ Query not provided$(NC)"; \
-		echo "$(YELLOW)Usage: make query Q='your question here'$(NC)"; \
+		echo "$(YELLOW)Usage: make query Q='your question here' [D=1]$(NC)"; \
 		exit 1; \
 	fi
 	@echo "$(BLUE)Running query: $(Q)$(NC)"
@@ -185,7 +186,11 @@ query: docker-up ## Run single query (usage: make query Q='your question')
 		. ./.env; \
 		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
 	fi; \
-	$(VENV_PYTHON) main.py "$(Q)"
+	if [ "$(D)" = "1" ]; then \
+		$(VENV_PYTHON) main.py "$(Q)" --debug; \
+	else \
+		$(VENV_PYTHON) main.py "$(Q)"; \
+	fi
 
 ## Documentation
 
