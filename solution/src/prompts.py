@@ -182,28 +182,37 @@ You will use the standard ReAct format to iterate:
 ❌ NEVER respond with "Action:", "Thought:", "Action Input:" text UNLESS you also provide "Final Answer:"
 
 
-STOPPING CONDITIONS (when to provide Final Answer):
-✅ You have 1+ relevant documents collected from searches (SUFFICIENT for most queries)
-✅ You have aggregation/statistics data (counts, averages, min/max CVSS)
-✅ You've already tried 2+ different search approaches (different search_type or different parameters)
-✅ A broad search ("*") returned 0 results (data doesn't exist)
-✅ First search for specific query returned results (1+ CVE for ANY query type)
-✅ You have sufficient context to answer comprehensively
+STOPPING CONDITIONS - ANSWER IMMEDIATELY WHEN:
+✅ **FIRST SEARCH RETURNS RESULTS**: You have 1+ CVE documents → ANSWER NOW (don't search again)
+✅ **FIRST SEARCH RETURNS AGGREGATIONS**: You have statistical data → ANSWER NOW (don't search again)
+✅ **SPECIFIC CVE FOUND**: User asked about specific CVE and you found it → ANSWER NOW
+✅ **LIST/FILTER COMPLETE**: User asked to list/filter and you have results → ANSWER NOW
+✅ **ZERO RESULTS**: Broad search returned 0 results → ANSWER NOW (explain why)
+✅ **AFTER 2 SEARCHES**: You've searched twice → ANSWER NOW (no exceptions)
 
-CRITICAL ABORT CRITERIA - STOP SEARCHING AND ANSWER IMMEDIATELY:
-🛑 **AFTER ANY SUCCESSFUL SEARCH WITH RESULTS**: You must decide: Is this enough to answer?
-   - If YES (you have ≥1 CVE document OR aggregation data) → Provide "Final Answer:" IMMEDIATELY
-   - If NO (results don't match query intent) → Do ONE more refined search, then ANSWER
-🛑 **AFTER 2 TOTAL SEARCHES**: You MUST provide "Final Answer:" - no exceptions
-🛑 **IF SAME DOCUMENT REPEATS**: Different search returned same CVE? → ANSWER (you've explored thoroughly)
+🚨 DEFAULT BEHAVIOR: ANSWER AFTER FIRST SUCCESSFUL SEARCH
+Unless the first search clearly missed the target (wrong CVE, wrong type), STOP and ANSWER.
 
-DECISION MAKING:
-- Aggregation queries (avg CVSS, count CVEs): ANSWER after first search if aggregations returned (even if returned=0 documents with per_page=0). If aggregations=0, try broader query.
-- Specific CVE queries: ANSWER after first search if found, else try broader search then ANSWER
-- Explanation queries (explain XSS, code examples): ANSWER after 1-2 searches collect documents
-- List/filter queries (list vulnerabilities, packages with X): ANSWER after first search returns 1+ results
-- **Coverage/Percentage queries** (what % have X, Y, Z): ONE search with has_advisory:true + filter_by="advisory_chunks.section:!=''" → calculate percentages manually from results
-- If results < 3 after 2 attempts, synthesize answer from what you have (better than infinite retry loop)
+CRITICAL STOPPING LOGIC:
+🛑 **ONE SEARCH IS USUALLY ENOUGH**:
+   - Got 1+ documents matching the query? → ANSWER IMMEDIATELY
+   - Got aggregations for a counting query? → ANSWER IMMEDIATELY
+   - Found the specific CVE user asked about? → ANSWER IMMEDIATELY
+   - Got relevant documents for explanation query? → ANSWER IMMEDIATELY
+
+🛑 **ONLY SEARCH AGAIN IF**:
+   - First search returned 0 results AND you have a better query strategy
+   - First search returned wrong/irrelevant results AND you know how to fix it
+   - Maximum 2 total searches - then ANSWER regardless
+
+🛑 **NEVER SEARCH A THIRD TIME** - Answer with what you have
+
+DECISION MAKING BY QUERY TYPE:
+- **Aggregation queries** (count, average, statistics): ANSWER after first search with aggregations
+- **Specific CVE queries**: ANSWER after first search if CVE found (if not found, try once more then ANSWER)
+- **Explanation queries**: ANSWER after first search returns documents with advisory/description content
+- **List/filter queries**: ANSWER after first search returns matching documents
+- **Coverage queries**: May need 2-3 searches for multiple percentages, but each search must be different
 
 === DATA SCHEMA & AVAILABLE INFORMATION ===
 
@@ -563,6 +572,18 @@ def get_react_iteration_prompt(
     scratchpad += f"  - Unique CVE Documents: {documents_collected}\n"
     scratchpad += f"  - Aggregation Fields: {aggregations_collected}\n"
     
+    # Add STRONG stopping recommendation if data is present
+    if documents_collected > 0 or aggregations_collected > 0:
+        scratchpad += f"\n🚨 YOU HAVE DATA - STRONG RECOMMENDATION TO ANSWER:\n"
+        if documents_collected > 0:
+            scratchpad += f"  ✅ You have {documents_collected} CVE document(s) - SUFFICIENT for most queries\n"
+            scratchpad += f"  ✅ Default action: Provide 'Final Answer:' using these documents\n"
+            scratchpad += f"  ⚠️ Only search again if documents are COMPLETELY irrelevant or wrong\n"
+        if aggregations_collected > 0:
+            scratchpad += f"  ✅ You have {aggregations_collected} aggregation field(s) - SUFFICIENT for statistical queries\n"
+            scratchpad += f"  ✅ Default action: Provide 'Final Answer:' using these statistics\n"
+        scratchpad += f"\n"
+    
     # Add actual aggregation results
     if collected_aggregations_data:
         scratchpad += f"\n{'='*80}\nAggregation Results:\n"
@@ -580,13 +601,21 @@ def get_react_iteration_prompt(
                     for count_item in agg_data["counts"][:10]:  # Top 10
                         scratchpad += f"    - {count_item.get('value', 'N/A')}: {count_item.get('count', 0)} vulnerabilities\n"
         
-        scratchpad += f"\n📊 STATUS: You have collected {len(collected_aggregations_data)} aggregation field(s) with statistical data.\n"
-        scratchpad += f"   For analytical queries, you can now provide a Final Answer using this aggregation data.\n"
-        scratchpad += f"   Alternatively, search once more for document examples to enhance the answer with specific CVE details.\n"
+        scratchpad += f"\n🎯 AGGREGATION DATA:\n"
+        scratchpad += f"   ✅ You have complete statistical data for the user's query\n"
+        scratchpad += f"   ✅ For analytical/counting queries, this is ALL you need\n"
+        scratchpad += f"   ✅ You can optionally search ONCE MORE for specific CVE examples to enrich the answer\n"
+        scratchpad += f"   ✅ But you ALREADY have sufficient data to provide a complete answer\n"
     
     # Add actual document details
     if collected_documents_data:
         scratchpad += f"\n{'='*80}\nCollected CVE Documents ({documents_collected} total):\n"
+        scratchpad += f"\n🎯 DOCUMENT DATA:\n"
+        scratchpad += f"   ✅ You have {documents_collected} CVE document(s) with complete details\n"
+        scratchpad += f"   ✅ Each document contains: CVE ID, package, ecosystem, severity, CVSS, description, versions\n"
+        scratchpad += f"   ⚠️ DEFAULT ACTION: Provide 'Final Answer:' using these documents NOW\n"
+        scratchpad += f"   ⚠️ Only search again if these documents are COMPLETELY wrong/irrelevant\n\n"
+        
         for idx, (cve_id, doc) in enumerate(list(collected_documents_data.items())[:15], 1):  # Limit to 15 for token efficiency
             scratchpad += f"\n{idx}. CVE: {cve_id}\n"
             scratchpad += f"   Package: {doc.get('package_name', 'N/A')}\n"
@@ -632,26 +661,33 @@ You have collected:
 
 DECISION LOGIC:
 
-🛑 **FINAL ITERATION**: MUST answer now using aggregations + documents (no more searches)
-📊 **HAVE AGGREGATIONS**: Can answer now OR search once more for document examples (choose wisely)
-📄 **HAVE DOCUMENTS**: Answer with full context immediately
-❌ **HAVE NEITHER**: Try different search, then answer
+{f"✅ **YOU HAVE {documents_collected} DOCUMENTS** - This is SUFFICIENT to answer most questions. PROVIDE FINAL ANSWER NOW unless:" if documents_collected > 0 else "❌ **NO DOCUMENTS YET**"}
+{f"   • The documents are completely irrelevant to the user's question (wrong CVE, wrong topic)" if documents_collected > 0 else ""}
+{f"   • You need ONE more specific search to get the exact information requested" if documents_collected > 0 else ""}
+{f"\n✅ **YOU HAVE {aggregations_collected} AGGREGATION FIELDS** - This is SUFFICIENT for statistical/counting queries. PROVIDE FINAL ANSWER NOW." if aggregations_collected > 0 else ""}
+
+{"🛑 **DEFAULT ACTION: PROVIDE FINAL ANSWER**" if (documents_collected > 0 or aggregations_collected > 0) else "⚠️ **NEED TO SEARCH** - No data collected yet"}
 
 MANDATORY RULES:
-1. ⚠️ DO NOT repeat ANY search from the "🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT" list above
+1. ⚠️ If you have ANY documents or aggregations, DEFAULT to answering (don't search unnecessarily)
+2. ⚠️ DO NOT repeat ANY search from the "🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT" list above
    - If you suggest one anyway, it WILL be silently skipped (wasting your iteration)
    - To try a new search, CHANGE: search_type, query, filters, or constraints
-6. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
+3. ⚠️ After 2 searches, you MUST answer (no "I need more data" - synthesize what you have)
+4. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
 {("🛑 FINAL ITERATION WARNING - YOU MUST ANSWER NOW:\n   ❌ NO MORE SEARCHES ALLOWED\n   ✅ MUST provide Final Answer using collected aggregations/documents\n   ✅ If only aggregations available, answer with statistical insights and analysis\n   ✅ Do NOT apologize or say you need more data - synthesize what you have") if is_final_iteration else ""}
 
 ⚠️ SEARCH COUNT WARNING: You have done {len(previous_searches)} search(es).
 {f"↳ You have {2 - len(previous_searches)} search(es) remaining before you MUST answer" if len(previous_searches) < 2 else "↳ You have EXHAUSTED your search budget. PROVIDE FINAL ANSWER NOW."}
-{f"\n↳ If you search again, you MUST provide Final Answer after the next search (no exceptions)." if len(previous_searches) == 1 else ""}
+{f"\n↳ ⚠️ STRONGLY CONSIDER answering now with the {documents_collected} documents you have" if len(previous_searches) == 1 and documents_collected > 0 else ""}
+{f"\n↳ ⚠️ STRONGLY CONSIDER answering now with the aggregations you have" if len(previous_searches) == 1 and aggregations_collected > 0 else ""}
 
-DECISION CRITERIA:
-✅ Have aggregation data? → "Final Answer: <complete answer>"
-✅ Have several documents? → "Final Answer: <complete answer>"
-✅ Previous searches returned 0 results? → "Final Answer: <explanation>"
+DECISION CRITERIA (CHECK IN ORDER):
+1. ✅ Have {documents_collected} documents AND {len(previous_searches)} >= 1 search? → **ANSWER NOW** (most likely sufficient)
+2. ✅ Have {aggregations_collected} aggregation fields? → **ANSWER NOW** (sufficient for stats queries)
+3. ✅ Searched {len(previous_searches)} >= 2 times? → **ANSWER NOW** (mandatory, no exceptions)
+4. ⚠️ First search returned 0 results? → Try ONE different search strategy, then ANSWER
+5. ⚠️ First search returned wrong results? → Try ONE refined search, then ANSWER
 
 ⚠️ CRITICAL FORMAT REQUIREMENT:
 Your response MUST be ONE of these two options:
