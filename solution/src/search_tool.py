@@ -200,6 +200,8 @@ class VulnerabilitySearchTool:
         vulnerability_types: Optional[List[str]] = None,
         min_cvss_score: Optional[float] = None,
         affected_version_status: Optional[List[str]] = None,
+        has_fix: Optional[bool] = None,
+        published_date_after: Optional[str] = None,
         # Flexible overrides for edge cases
         additional_filters: Optional[str] = None,
         facet_by: Optional[str] = None,
@@ -224,10 +226,14 @@ class VulnerabilitySearchTool:
             min_cvss_score: Minimum CVSS score threshold
             affected_version_status: Filter by version status ("vulnerable", "safe", etc.)
                 Only returns CVEs with affected versions matching this status
+            has_fix: Filter by whether a fix is available. True returns CVEs with fixes,
+                False returns CVEs with no available fix, None (default) returns all CVEs
+            published_date_after: Filter to show only vulnerabilities published on or after this date.
+                Format: "YYYY-MM-DD" (e.g., "2024-02-01")
+                Useful for finding recent vulnerabilities or those discovered in a specific time period
             additional_filters: Raw Typesense filter expression for advanced filtering.
                 Examples: "cvss_score:<=9.0", "advisory_chunks.{section:=testing}",
-                "published_date:>=2024-01-01", "package_name:express-validator",
-                "has_advisory:true" (filter to CVEs with detailed advisory documentation)
+                "package_name:express-validator", "has_advisory:true" (filter to CVEs with detailed advisory documentation)
                 Advanced: "affected_versions_data.{status:=vulnerable}" (affected versions with vulnerable status)
             facet_by: Comma-separated field names for aggregation/faceting.
                 Returns statistics (avg/min/max/sum) for numeric fields and
@@ -259,6 +265,8 @@ class VulnerabilitySearchTool:
                 "min_cvss_score": min_cvss_score,
                 "cve_ids": cve_ids,
                 "affected_version_status": affected_version_status,
+                "has_fix": has_fix,
+                "published_date_after": published_date_after,
                 "additional_filters": additional_filters,
                 "sort_by": sort_by,
                 "hybrid_search_alpha": hybrid_search_alpha,
@@ -282,6 +290,8 @@ class VulnerabilitySearchTool:
             vulnerability_types,
             min_cvss_score,
             affected_version_status,
+            has_fix,
+            published_date_after,
             additional_filters,
         )
         if filters:
@@ -446,12 +456,18 @@ class VulnerabilitySearchTool:
         vulnerability_types: Optional[List[str]],
         min_cvss_score: Optional[float],
         affected_version_status: Optional[List[str]],
+        has_fix: Optional[bool],
+        published_date_after: Optional[str],
         additional_filters: Optional[str],
     ) -> Optional[str]:
         """Build Typesense filter expression from parameters.
 
         Applies optional filters for CVE IDs, ecosystems, severity levels,
-        vulnerability types, CVSS score thresholds, and affected versions.
+        vulnerability types, CVSS score thresholds, affected versions, and date ranges.
+        
+        New filters:
+        - has_fix: True filters to CVEs with available fixes, False for CVEs without fixes
+        - published_date_after: Filter to vulnerabilities published on or after this date (YYYY-MM-DD format)
         
         Affected versions filtering:
         - affected_version_status: Filter by nested affected_versions_data.status (vulnerable, safe, etc.)
@@ -485,6 +501,14 @@ class VulnerabilitySearchTool:
 
         if min_cvss_score is not None:
             filters.append(f"cvss_score:>={min_cvss_score}")
+
+        # Filter by whether a fix is available (using boolean has_fix field)
+        if has_fix is not None:
+            filters.append(f"has_fix:={str(has_fix).lower()}")
+
+        # Filter by publication date (only shows vulnerabilities published on or after this date)
+        if published_date_after:
+            filters.append(f"published_date:>={published_date_after}")
 
         # Filter by affected version status (vulnerable, safe, etc.)
         if affected_version_status:

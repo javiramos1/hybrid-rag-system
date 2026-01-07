@@ -393,6 +393,7 @@ def create_typesense_collection(client: typesense.Client) -> None:
             {"name": "cvss_score", "type": "float", "facet": True, "optional": True},
             {"name": "affected_versions", "type": "string", "optional": True},
             {"name": "fixed_version", "type": "string", "optional": True},
+            {"name": "has_fix", "type": "bool", "facet": True},  # Whether CVE has a fix available
             {"name": "published_date", "type": "string", "optional": True},
             {"name": "content", "type": "string"},  # CSV description
             {"name": "embedding", "type": "float[]", "num_dim": 384},  # CSV embedding
@@ -495,6 +496,7 @@ def import_documents(
     for idx, row in enumerate(csv_data.iter_rows(named=True)):
         cve_id = row["cve_id"]
 
+        fixed_version = row.get("fixed_version") or ""
         doc = {
             "id": f"csv-{cve_id}",
             "cve_id": cve_id,
@@ -504,7 +506,8 @@ def import_documents(
             "severity": row["severity"],
             "cvss_score": float(row["cvss_score"]),
             "affected_versions": row.get("affected_versions") or "",
-            "fixed_version": row.get("fixed_version") or "",
+            "fixed_version": fixed_version,
+            "has_fix": bool(fixed_version.strip()),  # True if fixed_version is non-empty
             "published_date": row.get("published_date") or "",
             "content": row["description"],
             "embedding": csv_embeddings[idx],

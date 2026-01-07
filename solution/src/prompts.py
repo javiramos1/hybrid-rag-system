@@ -75,6 +75,18 @@ Supports three search types: keyword (metadata filtering/aggregations), semantic
                     "description": """Filter by affected version status (e.g., ["vulnerable", "safe"]).
 Only returns CVEs that have affected versions with the specified status.""",
                 },
+                "has_fix": {
+                    "type": "boolean",
+                    "description": """Filter by availability of fixes.
+true: Show only CVEs that have a fix available.
+false: Show only CVEs with no available fix yet.
+null/omitted: Show all CVEs regardless of fix availability.""",
+                },
+                "published_date_after": {
+                    "type": "string",
+                    "description": """Filter to show only vulnerabilities published on or after this date.
+Format: "YYYY-MM-DD" (e.g., "2024-02-01").""",
+                },
                 "additional_filters": {
                     "type": "string",
                     "description": """Raw Typesense filter expression for precise queries.
@@ -84,9 +96,9 @@ Combine with &&: "has_advisory:true && advisory_chunks.{section:=testing} && adv
 
 AFFECTED VERSIONS FILTERS (nested fields - use ONLY for version status queries):
 - "affected_versions_data.{status:=vulnerable}": Filter CVEs with vulnerable versions
-- Only use affected_versions_data for version status checks. For fixed version info, use top-level fields.
+- Only use affected_versions_data for version status checks. For fixed version info, use fixed_version_exists parameter instead.
 
-OTHER FILTERS: "cvss_score:>=8.0", "cvss_score:<=9.0"
+OTHER FILTERS: "cvss_score:>=8.0", "cvss_score:<=9.0", "package_name:express-validator"
 
 See system instructions for complete details and examples.
 """,
@@ -95,7 +107,7 @@ See system instructions for complete details and examples.
                     "type": "string",
                     "description": """Comma-separated field names for aggregation/counting. Returns stats (numeric fields) and counts (categorical fields).
 
-Use only top-level fields: "vulnerability_type", "severity", "ecosystem", "cvss_score", "cve_id", "package_name", "has_advisory".
+Use only top-level fields: "vulnerability_type", "severity", "ecosystem", "cvss_score", "cve_id", "package_name", "has_advisory", "has_fix".
 
 ⚠️ IMPORTANT: Typesense only supports faceting on TOP-LEVEL fields, not nested fields. 
 
@@ -366,6 +378,9 @@ Default to search_type="hybrid" unless user is asking ONLY about metadata or ONL
    - "How many vulnerabilities per ecosystem?"
      → query="*", facet_by="ecosystem", per_page=0
      → Returns counts: npm (X), pip (Y), maven (Z)
+   - "How many vulnerabilities have fixes available?"
+     → query="*", facet_by="has_fix", per_page=0
+     → Returns counts: true (X with fixes), false (Y without fixes)
    - "Average CVSS score by severity?"
      → query="*", facet_by="severity,cvss_score", per_page=0
      → Returns both counts (severity) and stats (CVSS average)
@@ -435,8 +450,8 @@ Ignored for keyword and semantic search types.
 
 **facet_by**: For aggregations. Numeric fields return stats (avg/min/max), string fields return counts.
 Set per_page=0 for aggregations-only queries. 
-**Valid facet_by field names**: "cve_id", "package_name", "ecosystem", "vulnerability_type", "severity", "cvss_score", "has_advisory"
-Examples: "cvss_score" (returns avg/min/max), "ecosystem" (returns counts), "severity,vulnerability_type" (both)
+**Valid facet_by field names**: "cve_id", "package_name", "ecosystem", "vulnerability_type", "severity", "cvss_score", "has_advisory", "has_fix"
+Examples: "cvss_score" (returns avg/min/max), "ecosystem" (returns counts), "severity,vulnerability_type" (both), "has_fix" (returns counts for true/false)
 
 **group_by**: Rarely needed with CVE-centric documents (each CVE is one unique document). 
 Only use if you want to limit results per category (e.g., group_by="ecosystem" for 3 npm + 3 pip + 3 maven).
@@ -573,6 +588,8 @@ def get_react_iteration_prompt(
             ecosystems = params.get('ecosystems', [])
             severity_levels = params.get('severity_levels', [])
             vulnerability_types = params.get('vulnerability_types', [])
+            has_fix = params.get('has_fix')
+            published_date_after = params.get('published_date_after')
             
             scratchpad += f"\n❌ Search {i} ALREADY DONE - DO NOT REPEAT:\n"
             scratchpad += f"  search_type='{search_type}', query='{query}'\n"
@@ -586,6 +603,10 @@ def get_react_iteration_prompt(
                 scratchpad += f"  severity_levels={severity_levels}\n"
             if vulnerability_types:
                 scratchpad += f"  vulnerability_types={vulnerability_types}\n"
+            if has_fix is not None:
+                scratchpad += f"  has_fix={has_fix}\n"
+            if published_date_after:
+                scratchpad += f"  published_date_after='{published_date_after}'\n"
         
         # Then show what was found
         scratchpad += f"\n{'='*80}\nSearch History ({len(previous_searches)} attempts):\n"
@@ -629,7 +650,7 @@ def get_react_iteration_prompt(
                     scratchpad += f"    - Sum: {stats.get('sum', 'N/A')}\n"
                 if "counts" in agg_data:
                     scratchpad += f"  {field} Counts:\n"
-                    for count_item in agg_data["counts"][:10]:  # Top 10
+                    for count_item in agg_data["counts"][:20]:  # Top 20
                         scratchpad += f"    - {count_item.get('value', 'N/A')}: {count_item.get('count', 0)} vulnerabilities\n"
         
         scratchpad += f"\n🎯 AGGREGATION DATA:\n"
@@ -647,26 +668,27 @@ def get_react_iteration_prompt(
         scratchpad += f"   ⚠️ DEFAULT ACTION: Provide 'Final Answer:' using these documents NOW\n"
         scratchpad += f"   ⚠️ Only search again if these documents are COMPLETELY wrong/irrelevant\n\n"
         
-        for idx, (cve_id, doc) in enumerate(list(collected_documents_data.items())[:15], 1):  # Limit to 15 for token efficiency
+        for idx, (cve_id, doc) in enumerate(list(collected_documents_data.items())[:20], 1):  # Limit to 20 for token efficiency
             scratchpad += f"\n{idx}. CVE: {cve_id}\n"
             scratchpad += f"   Package: {doc.get('package_name', 'N/A')}\n"
             scratchpad += f"   Ecosystem: {doc.get('ecosystem', 'N/A')}\n"
             scratchpad += f"   Severity: {doc.get('severity', 'N/A')}\n"
             scratchpad += f"   CVSS Score: {doc.get('cvss_score', 'N/A')}\n"
             scratchpad += f"   Vulnerability Type: {doc.get('vulnerability_type', 'N/A')}\n"
+            scratchpad += f"   Published Date: {doc.get('published_date', 'N/A')}\n"
             scratchpad += f"   Fixed Version: {doc.get('fixed_version', 'N/A')}\n"
             scratchpad += f"   Affected Versions: {doc.get('affected_versions', 'N/A')}\n"
             
             if doc.get("description"):
                 desc = doc['description']
-                scratchpad += f"   Description: {desc[:300] if len(desc) > 300 else desc}\n"
+                scratchpad += f"   Description: {desc[:500] if len(desc) > 500 else desc}\n"
 
             if doc.get("advisory_text"):
                 advisory = doc['advisory_text']
-                scratchpad += f"   Advisory: {advisory[:400] if len(advisory) > 400 else advisory}\n"
+                scratchpad += f"   Advisory: {advisory[:1000] if len(advisory) > 1000 else advisory}\n"
         
-        if documents_collected > 15:
-            scratchpad += f"\n... and {documents_collected - 15} more documents\n"
+        if documents_collected > 20:
+            scratchpad += f"\n... and {documents_collected - 20} more documents\n"
     
     # Build the ReAct format prompt
     prompt = f"""Use the following format:

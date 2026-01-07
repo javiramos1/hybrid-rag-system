@@ -395,6 +395,8 @@ class VulnerabilityAgent:
             "ecosystems": args_dict.get("ecosystems", []),
             "severity_levels": args_dict.get("severity_levels", []),
             "vulnerability_types": args_dict.get("vulnerability_types", []),
+            "has_fix": args_dict.get("has_fix"),
+            "published_date_after": args_dict.get("published_date_after"),
             "results_found": search_result.total_found,
         })
 
