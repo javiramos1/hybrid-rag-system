@@ -69,12 +69,22 @@ Supports three search types: keyword (metadata filtering/aggregations), semantic
                     "type": "number",
                     "description": "Minimum CVSS score (0.0-10.0).",
                 },
+                "affected_version_status": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": """Filter by affected version status (e.g., ["vulnerable", "safe"]).
+Only returns CVEs that have affected versions with the specified status.""",
+                },
                 "additional_filters": {
                     "type": "string",
                     "description": """Raw Typesense filter expression for precise queries.
 
 ADVISORY CHUNK FILTERS: "has_advisory:true", "advisory_chunks.{section:=remediation}", "advisory_chunks.{section:=testing}", "advisory_chunks.is_code:true"
 Combine with &&: "has_advisory:true && advisory_chunks.{section:=testing} && advisory_chunks.{section:=remediation}"
+
+AFFECTED VERSIONS FILTERS (nested fields - use ONLY for version status queries):
+- "affected_versions_data.{status:=vulnerable}": Filter CVEs with vulnerable versions
+- Only use affected_versions_data for version status checks. For fixed version info, use top-level fields.
 
 OTHER FILTERS: "cvss_score:>=8.0", "cvss_score:<=9.0"
 
@@ -86,6 +96,8 @@ See system instructions for complete details and examples.
                     "description": """Comma-separated field names for aggregation/counting. Returns stats (numeric fields) and counts (categorical fields).
 
 Use only top-level fields: "vulnerability_type", "severity", "ecosystem", "cvss_score", "cve_id", "package_name", "has_advisory".
+
+⚠️ IMPORTANT: Typesense only supports faceting on TOP-LEVEL fields, not nested fields. 
 
 Use with per_page=0 for aggregations only. See system instructions for complete details.
 """,
@@ -207,6 +219,11 @@ CRITICAL STOPPING LOGIC:
 
 🛑 **NEVER SEARCH A THIRD TIME** - Answer with what you have
 
+PRIORITIZATION:
+- **Analytical/Numerical Data**: ALWAYS use keyword search + aggregations (num/cat fields). Ignore semantic results.
+- **Categorical Data**: ALWAYS use keyword search + faceting. Ignore semantic results.
+- **Explanations/Examples**: Use semantic/hybrid search for advisory content.
+
 DECISION MAKING BY QUERY TYPE:
 - **Aggregation queries** (count, average, statistics): ANSWER after first search with aggregations
 - **Specific CVE queries**: ANSWER after first search if CVE found (if not found, try once more then ANSWER)
@@ -301,6 +318,20 @@ Faceting counts distinct values of a field across matching documents. Always use
 QUERY EXAMPLE (user asks for "well-documented with remediation"):
 ❌ DON'T: hybrid search for "remediation guidance" (returns all results, not filtered)
 ✅ DO: additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}" (filters to actual advisory sections)
+
+AFFECTED VERSIONS FILTERING - TOP-LEVEL vs NESTED FIELDS:
+
+Each CVE document contains:
+- **Top-level fields** (from CSV): affected_versions (version range), fixed_version (first patched version)
+- **Nested field** (from advisory): affected_versions_data array with status info (vulnerable/safe/not affected)
+
+**WHEN TO USE:**
+- Top-level fields: "Show CVEs with fixes available" → Use fixed_version field (simple, fast)
+- Nested field: "Filter by version status" → Use affected_version_status parameter (vulnerable/safe/not affected)
+
+**EXAMPLES:**
+- "Which vulnerabilities have patches?" → affected_version_status=["safe"] (shows versions marked as safe/patched)
+- "What is the fixed version of CVE-2024-1234?" → Use top-level fixed_version in results (already in response)
 
 DATASET FACTS:
 - **Total CVE documents indexed**: 47 vulnerabilities
@@ -623,6 +654,8 @@ def get_react_iteration_prompt(
             scratchpad += f"   Severity: {doc.get('severity', 'N/A')}\n"
             scratchpad += f"   CVSS Score: {doc.get('cvss_score', 'N/A')}\n"
             scratchpad += f"   Vulnerability Type: {doc.get('vulnerability_type', 'N/A')}\n"
+            scratchpad += f"   Fixed Version: {doc.get('fixed_version', 'N/A')}\n"
+            scratchpad += f"   Affected Versions: {doc.get('affected_versions', 'N/A')}\n"
             
             if doc.get("description"):
                 desc = doc['description']

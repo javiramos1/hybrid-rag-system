@@ -139,7 +139,7 @@ class VulnerabilityAgent:
         
         # Check for section-specific keywords (primary heuristics)
         has_remediation = any(w in q_lower for w in [
-            "remediation", "remediate", "fix", "fixed", "solution", "mitigation", "patch"
+            "remediation", "remediate", "solution", "mitigation", "patch", "how to fix", "how do i fix"
         ])
         has_testing = any(w in q_lower for w in [
             "testing", "test", "verify", "verification", "how to test", "test case"
@@ -404,6 +404,11 @@ class VulnerabilityAgent:
                 cve_id = doc.get("cve_id")
                 if cve_id and cve_id not in state.documents_collected:
                     state.documents_collected[cve_id] = doc
+                    logger.info(f"📥 Collected document: {cve_id}")
+                    logger.debug(f"   - fixed_version: {doc.get('fixed_version')}")
+                    logger.debug(f"   - affected_versions: {doc.get('affected_versions')}")
+                    logger.debug(f"   - package_name: {doc.get('package_name')}")
+                    logger.debug(f"   - has_advisory: {doc.get('has_advisory')}")
 
         # Collect aggregations (for statistics queries)
         if search_result.aggregations:

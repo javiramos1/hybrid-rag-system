@@ -103,14 +103,16 @@ def parse_advisories(task_dir: Path) -> list[dict]:
 
     For each advisory (8 total):
       1. Extract CVE ID and metadata from header
-      2. Split by ## section headers (semantic boundaries: Summary, Remediation, Details, etc.)
-      3. For sections with code blocks (```): keep entire section intact (never split mid-code)
-      4. For text-only sections: split at sentence boundaries (~500 chars per chunk)
-      5. Tag each chunk with section type (summary, remediation, details)
+      2. Parse affected versions table for filtering/aggregations
+      3. Split by ## section headers (semantic boundaries: Summary, Remediation, Details, etc.)
+      4. For sections with code blocks (```): keep entire section intact (never split mid-code)
+      5. For text-only sections: split at sentence boundaries (~500 chars per chunk)
+      6. Tag each chunk with section type (summary, remediation, testing, best_practices, details)
     
-    Returns list of ~60-80 chunk dicts {cve_id, content, section, is_code, package_name, ...}
+    Returns list of ~60-80 chunk dicts {cve_id, content, section, is_code, affected_versions, ...}
     Each chunk will be embedded separately for semantic search.
     Sections with code blocks are marked with is_code=true for filtering.
+    Affected versions data is attached to all chunks from the same CVE for filtering/aggregations.
     """
     advisories_dir = task_dir / "advisories"
     all_chunks = []
@@ -127,6 +129,11 @@ def parse_advisories(task_dir: Path) -> list[dict]:
             logger.warning(f"No CVE ID found in {filepath.name}, skipping")
             continue
 
+        # Parse affected versions table for metadata/filtering
+        affected_versions = _parse_affected_versions_table(content)
+        if affected_versions:
+            logger.debug(f"  Parsed {len(affected_versions)} affected version entries for {cve_id}")
+        
         # Split by section headers (##) to preserve semantic boundaries
         sections = re.split(r"^## ", content, flags=re.MULTILINE)
 
@@ -150,6 +157,7 @@ def parse_advisories(task_dir: Path) -> list[dict]:
                     "section": _categorize_section(section_title),
                     "is_code": True,
                     "cve_id": cve_id,
+                    "affected_versions": affected_versions,  # Attach parsed versions table
                 }
                 all_chunks.append(chunk)
                 logger.debug(
@@ -165,6 +173,7 @@ def parse_advisories(task_dir: Path) -> list[dict]:
                         "section": _categorize_section(section_title),
                         "is_code": False,
                         "cve_id": cve_id,
+                        "affected_versions": affected_versions,  # Attach parsed versions table
                     }
                     all_chunks.append(chunk)
                 logger.debug(
@@ -214,6 +223,73 @@ def _extract_metadata(content: str) -> dict:
             except (ValueError, IndexError):
                 pass
     return metadata
+
+
+def _parse_affected_versions_table(content: str) -> list[dict]:
+    """Parse affected versions table from markdown advisory.
+    
+    Markdown format (from advisories):
+    | Version Range | Status | Fixed Version |
+    |--------------|--------|---------------|
+    | < 4.5.0 | Vulnerable | 4.5.0 |
+    | >= 4.5.0 | Safe | - |
+    
+    Returns list of version entries with parsed metadata:
+    [
+        {"version_range": "< 4.5.0", "status": "Vulnerable", "fixed_version": "4.5.0"},
+        {"version_range": ">= 4.5.0", "status": "Safe", "fixed_version": None}
+    ]
+    
+    Enables queries like:
+    - "Show vulnerabilities affecting versions < 4.5.0"
+    - Aggregate: "How many CVEs have vulnerable versions < 2.0?"
+    - Filter: "Find npm packages with fixes available"
+    """
+    versions = []
+    lines = content.split("\n")
+    
+    # Find the affected versions table (starts with "### Affected Versions")
+    table_start = None
+    for idx, line in enumerate(lines):
+        if "### Affected Versions" in line or "## Affected Versions" in line:
+            table_start = idx + 1
+            break
+    
+    if table_start is None:
+        return versions
+    
+    # Skip header separator line (|---|---|---|)
+    in_table = False
+    for line in lines[table_start:]:
+        if line.strip().startswith("|"):
+            # Skip header row and separator
+            if "Version" in line or "---" in line:
+                in_table = True
+                continue
+            
+            if in_table:
+                # Parse table row
+                parts = [p.strip() for p in line.split("|")[1:-1]]  # Remove empty first/last
+                if len(parts) >= 3:
+                    version_range = parts[0]
+                    status = parts[1]
+                    fixed_version = parts[2]
+                    
+                    # Normalize "Safe" status and handle "-" for missing fixed version
+                    status_normalized = status.lower() if status else "unknown"
+                    fixed_version_normalized = None if fixed_version == "-" else fixed_version
+                    
+                    versions.append({
+                        "version_range": version_range,
+                        "status": status_normalized,
+                        "fixed_version": fixed_version_normalized,
+                    })
+        else:
+            # End of table when we hit non-table content
+            if in_table and line.strip() and not line.startswith("|"):
+                break
+    
+    return versions
 
 
 def _categorize_section(title: str) -> str:
@@ -289,10 +365,12 @@ def generate_embeddings(texts: list[str], model: SentenceTransformer) -> list[li
 
 
 def create_typesense_collection(client: typesense.Client) -> None:
-    """Create Typesense collection schema with nested advisory chunks.
+    """Create Typesense collection schema with nested advisory chunks and affected versions.
     
     One document per CVE (47 total). Each CVE doc has:
       - Top-level fields: cve_id, package_name, ecosystem, severity, cvss_score, etc.
+      - affected_versions_data: nested array of {version_range, status, fixed_version}
+        Enables filtering: "Show vulnerable versions < 2.0", aggregations: "Count by fix availability"
       - CSV embedding: vector for BM25+semantic hybrid search on description
       - has_advisory: boolean flag (8 CVEs have advisories, 39 don't)
       - advisory_chunks: nested array of {content, section, is_code, index, embedding}
@@ -323,6 +401,17 @@ def create_typesense_collection(client: typesense.Client) -> None:
                 "type": "bool",
                 "facet": True,
             },  # Whether CVE has detailed advisory documentation
+            # Nested affected versions table from advisory markdown
+            {
+                "name": "affected_versions_data",
+                "type": "object[]",
+                "optional": True,
+                "fields": [
+                    {"name": "version_range", "type": "string"},  # e.g., "< 4.5.0", ">= 2.0.0 < 2.3.1"
+                    {"name": "status", "type": "string", "facet": True},  # vulnerable, safe, unknown
+                    {"name": "fixed_version", "type": "string", "optional": True},  # e.g., "4.5.0"
+                ],
+            },
             # Nested advisory chunks (array of objects)
             {
                 "name": "advisory_chunks",
@@ -349,7 +438,7 @@ def create_typesense_collection(client: typesense.Client) -> None:
         pass
 
     client.collections.create(schema)
-    logger.info("Collection created successfully (nested chunks enabled)")
+    logger.info("Collection created successfully (nested chunks and affected versions enabled)")
 
 
 def import_documents(
@@ -359,21 +448,25 @@ def import_documents(
     advisory_chunks: list[dict],
     advisory_embeddings: list[list[float]],
 ) -> None:
-    """Import documents to Typesense with nested advisory chunks.
+    """Import documents to Typesense with nested advisory chunks and affected versions.
 
     Process:
-      1. Group advisory chunks by CVE ID (8 CVEs have advisories)
-      2. For each CVE: create doc with metadata + nested advisory_chunks array
+      1. Group advisory chunks and affected versions by CVE ID (8 CVEs have advisories)
+      2. For each CVE: create doc with metadata + nested advisory_chunks + affected_versions_data
       3. Each nested chunk has its own embedding (for semantic search within advisories)
       4. Batch import all 47 CVE docs (with ~60-80 nested chunks total)
     
     Result: Hybrid search spans CVE metadata (BM25) + advisory content (semantic)
     Analytics: 47 documents, not 95+ (clean reporting)
+    Affected versions enable filtering ("Show versions < 2.0") and aggregations
     """
-    logger.info("Preparing documents with nested chunks...")
+    logger.info("Preparing documents with nested chunks and affected versions...")
 
     # Group advisory chunks by CVE ID
     chunks_by_cve: dict[str, list[dict]] = {}
+    # Group affected versions by CVE ID
+    versions_by_cve: dict[str, list[dict]] = {}
+    
     for idx, chunk in enumerate(advisory_chunks):
         cve_id = chunk["cve_id"]
         if cve_id not in chunks_by_cve:
@@ -388,9 +481,15 @@ def import_documents(
             "embedding": advisory_embeddings[idx],
         }
         chunks_by_cve[cve_id].append(nested_chunk)
+        
+        # Store affected versions (only once per CVE)
+        if cve_id not in versions_by_cve:
+            affected_versions = chunk.get("affected_versions", [])
+            if affected_versions:
+                versions_by_cve[cve_id] = affected_versions
 
-    # Create CVE documents with nested advisory chunks
-    logger.info(f"Creating {len(csv_data)} CVE documents with nested chunks...")
+    # Create CVE documents with nested advisory chunks and affected versions
+    logger.info(f"Creating {len(csv_data)} CVE documents with nested chunks and affected versions...")
     documents = []
 
     for idx, row in enumerate(csv_data.iter_rows(named=True)):
@@ -415,11 +514,15 @@ def import_documents(
         # Add nested advisory chunks if available
         if cve_id in chunks_by_cve:
             doc["advisory_chunks"] = chunks_by_cve[cve_id]
+        
+        # Add nested affected versions data if available
+        if cve_id in versions_by_cve:
+            doc["affected_versions_data"] = versions_by_cve[cve_id]
 
         documents.append(doc)
 
     # Batch import to Typesense
-    logger.info(f"Importing {len(documents)} CVE documents with nested chunks...")
+    logger.info(f"Importing {len(documents)} CVE documents with nested chunks and affected versions...")
     client.collections["vulnerabilities"].documents.import_(documents)
     logger.info(f"Successfully imported {len(documents)} CVE documents")
 
@@ -428,9 +531,10 @@ def import_documents(
     code_chunks = sum(
         1 for chunks in chunks_by_cve.values() for chunk in chunks if chunk.get("is_code", False)
     )
+    total_versions = sum(len(versions) for versions in versions_by_cve.values())
     logger.info(
         f"Statistics: {len(documents)} CVE documents, {total_chunks} nested advisory chunks "
-        f"({code_chunks} with code)"
+        f"({code_chunks} with code), {total_versions} affected version entries"
     )
 
 

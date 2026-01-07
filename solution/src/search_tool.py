@@ -199,6 +199,7 @@ class VulnerabilitySearchTool:
         severity_levels: Optional[List[str]] = None,
         vulnerability_types: Optional[List[str]] = None,
         min_cvss_score: Optional[float] = None,
+        affected_version_status: Optional[List[str]] = None,
         # Flexible overrides for edge cases
         additional_filters: Optional[str] = None,
         facet_by: Optional[str] = None,
@@ -221,10 +222,13 @@ class VulnerabilitySearchTool:
             severity_levels: Filter by severity level (Critical, High, Medium, Low)
             vulnerability_types: Filter by vulnerability type (XSS, SQL Injection, RCE, etc.)
             min_cvss_score: Minimum CVSS score threshold
+            affected_version_status: Filter by version status ("vulnerable", "safe", etc.)
+                Only returns CVEs with affected versions matching this status
             additional_filters: Raw Typesense filter expression for advanced filtering.
                 Examples: "cvss_score:<=9.0", "advisory_chunks.{section:=testing}",
                 "published_date:>=2024-01-01", "package_name:express-validator",
                 "has_advisory:true" (filter to CVEs with detailed advisory documentation)
+                Advanced: "affected_versions_data.{status:=vulnerable}" (affected versions with vulnerable status)
             facet_by: Comma-separated field names for aggregation/faceting.
                 Returns statistics (avg/min/max/sum) for numeric fields and
                 category counts for string fields.
@@ -254,6 +258,7 @@ class VulnerabilitySearchTool:
                 "vulnerability_types": vulnerability_types,
                 "min_cvss_score": min_cvss_score,
                 "cve_ids": cve_ids,
+                "affected_version_status": affected_version_status,
                 "additional_filters": additional_filters,
                 "sort_by": sort_by,
                 "hybrid_search_alpha": hybrid_search_alpha,
@@ -276,6 +281,7 @@ class VulnerabilitySearchTool:
             severity_levels,
             vulnerability_types,
             min_cvss_score,
+            affected_version_status,
             additional_filters,
         )
         if filters:
@@ -439,12 +445,16 @@ class VulnerabilitySearchTool:
         severity_levels: Optional[List[str]],
         vulnerability_types: Optional[List[str]],
         min_cvss_score: Optional[float],
+        affected_version_status: Optional[List[str]],
         additional_filters: Optional[str],
     ) -> Optional[str]:
         """Build Typesense filter expression from parameters.
 
         Applies optional filters for CVE IDs, ecosystems, severity levels,
-        vulnerability types, and CVSS score thresholds.
+        vulnerability types, CVSS score thresholds, and affected versions.
+        
+        Affected versions filtering:
+        - affected_version_status: Filter by nested affected_versions_data.status (vulnerable, safe, etc.)
         """
         filters = []
 
@@ -475,6 +485,11 @@ class VulnerabilitySearchTool:
 
         if min_cvss_score is not None:
             filters.append(f"cvss_score:>={min_cvss_score}")
+
+        # Filter by affected version status (vulnerable, safe, etc.)
+        if affected_version_status:
+            status_filter = ",".join(affected_version_status)
+            filters.append(f"affected_versions_data.{{status:[{status_filter}]}}")
 
         # Add raw filter expression for advanced use cases
         if additional_filters:
