@@ -681,11 +681,11 @@ def get_react_iteration_prompt(
             
             if doc.get("description"):
                 desc = doc['description']
-                scratchpad += f"   Description: {desc[:500] if len(desc) > 500 else desc}\n"
+                scratchpad += f"   Description: {desc[:1000] if len(desc) > 1000 else desc}\n"
 
             if doc.get("advisory_text"):
                 advisory = doc['advisory_text']
-                scratchpad += f"   Advisory: {advisory[:1000] if len(advisory) > 1000 else advisory}\n"
+                scratchpad += f"   Advisory: {advisory[:2000] if len(advisory) > 2000 else advisory}\n"
         
         if documents_collected > 20:
             scratchpad += f"\n... and {documents_collected - 20} more documents\n"
