@@ -272,6 +272,53 @@ def test_queries():
             "query": "Show all npm Critical vulnerabilities that have both testing procedures and best practices documented",
             "expect": "Hybrid: Filter ecosystems=['npm'] AND severity=['Critical'] AND has_advisory=true. Check for testing AND best_practices sections."
         },
+        
+        # ========== TRICKY QUERIES: Real-World Validation ==========
+        {
+            "type": "TRICKY #1 - Specific CVE + Advisory",
+            "query": "How do I fix CVE-2024-1234? What version should I upgrade to and what code examples show the vulnerability?",
+            "expect": "✅ Heuristic triggers (CVE pattern). Search: Filter cve_ids=['CVE-2024-1234']. Returns: Correct fixed_version (7.1.0), vulnerable code example, best practices. Citations: CVE-2024-1234 with CVSS score."
+        },
+        {
+            "type": "TRICKY #2 - Structured Filtering + Explanation",
+            "query": "Show me all Critical npm vulnerabilities and explain the attack types",
+            "expect": "✅ Filter: severity=['Critical'] AND ecosystems=['npm'] (3 results). Each: CVE ID, CVSS score, vulnerability_type, attack vectors from advisories. Citations: All CVE IDs with versions."
+        },
+        {
+            "type": "TRICKY #3 - Type Filtering + Heuristic",
+            "query": "List all SQL Injection vulnerabilities and provide remediation guidance",
+            "expect": "✅ Heuristic triggers ('remediation'). Filter: vulnerability_types=['SQL Injection'] (3 results). Each: Vulnerable code, ORM recommendations, secure patterns. Citations: All 3 CVE IDs with package names and versions."
+        },
+        {
+            "type": "TRICKY #4 - RCE Analysis",
+            "query": "List all RCE vulnerabilities in Python packages and explain how they can be exploited",
+            "expect": "✅ Filter: vulnerability_types=['RCE'] AND ecosystems=['pip'] (1 result). Explains: Command injection mechanics, deserialization risks, eval() dangers. Citations: CVE ID, package, affected versions, CVSS."
+        },
+        {
+            "type": "TRICKY #5 - Analytics/Percentages",
+            "query": "What percentage of vulnerabilities have testing procedures, remediation guidance, and best practices documentation?",
+            "expect": "✅ Heuristic triggers ('percentage'). Search: has_advisory=true. Calculates coverage: Testing ≈12.8%, Remediation ≈17.0%, Best Practices ≈17.0%. Lists CVE IDs for each section type."
+        },
+        {
+            "type": "TRICKY #6 - Documentation Gaps Analysis",
+            "query": "Compare the number of Critical and High severity npm vulnerabilities that have advisory documentation. Which vulnerability types are better documented with testing steps?",
+            "expect": "✅ Heuristic: Detects 'testing' keywords + 'documented'. Filter: severity=['Critical','High'] AND ecosystems=['npm'] AND has_advisory=true. Returns: Critical (2) vs High (1) count comparison. Data table with all 8 vulnerability types and their testing documentation status. Citations: All CVE IDs with CVSS scores."
+        },
+        {
+            "type": "TRICKY #7 - Multi-Dimensional Filtering",
+            "query": "I'm using the express library - show me all Critical severity vulnerabilities related to express and provide detailed remediation steps from the security advisories.",
+            "expect": "✅ Heuristic: Detects 'remediation steps' keyword. Multi-filter: Query='express' AND severity=['Critical'] AND ecosystems=['npm'] AND has_advisory=true. Returns: 2 Critical npm vulnerabilities. Detailed: Vulnerable code examples, vulnerable patterns, fixed code with parameterized queries, step-by-step remediation guidance. Citations: CVE IDs, CVSS scores, affected versions."
+        },
+        {
+            "type": "TRICKY #8 - Comparative Ecosystem Analysis",
+            "query": "Analyze the vulnerability landscape: which ecosystem (npm, pip, maven) has the highest concentration of Critical or High severity vulnerabilities, and are there specific vulnerability types that dominate each ecosystem?",
+            "expect": "✅ Aggregation + Comparative analysis. Filter: severity=['Critical','High']. Counts per ecosystem: npm (18), pip (17), maven (12). Dominant types per ecosystem: npm=[SQL Injection, Auth Bypass, Path Traversal], pip=[XXE, Information Disclosure, Code Injection], maven=[SSTI, XSS, Insecure Deserialization]. Strategic remediation recommendations. Citations: Examples from each ecosystem."
+        },
+        {
+            "type": "TRICKY #9 - Documentation Coverage Assessment",
+            "query": "Identify Critical severity vulnerabilities that lack comprehensive security advisories. Which packages should have more detailed documentation, and what information is missing?",
+            "expect": "✅ Heuristic: Detects 'documentation' keyword. Filter: severity=['Critical'] AND (has_advisory=false OR incomplete_advisory). Analysis: Identifies CVEs without testing docs, remediation guidance, or best practices sections. Lists gaps: Missing testing procedures, missing remediation code samples, insufficient version guidance. Recommendations for documentation improvements. Citations: All Critical CVE IDs with package names and CVSS scores."
+        },
     ]
     
     # Run each test case

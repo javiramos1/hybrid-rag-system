@@ -85,7 +85,7 @@ See system instructions for complete details and examples.
                     "type": "string",
                     "description": """Comma-separated field names for aggregation/counting. Returns stats (numeric fields) and counts (categorical fields).
 
-Two methods: Standard fields ("vulnerability_type", "severity", "ecosystem", "cvss_score") or advisory chunks ("advisory_chunks.section", "has_advisory").
+Use only top-level fields: "vulnerability_type", "severity", "ecosystem", "cvss_score", "cve_id", "package_name", "has_advisory".
 
 Use with per_page=0 for aggregations only. See system instructions for complete details.
 """,
@@ -198,11 +198,11 @@ CRITICAL ABORT CRITERIA - STOP SEARCHING AND ANSWER IMMEDIATELY:
 🛑 **IF SAME DOCUMENT REPEATS**: Different search returned same CVE? → ANSWER (you've explored thoroughly)
 
 DECISION MAKING:
-- Aggregation queries (avg CVSS, count CVEs): ANSWER after first search returns stats
+- Aggregation queries (avg CVSS, count CVEs): ANSWER after first search if aggregations returned (even if returned=0 documents with per_page=0). If aggregations=0, try broader query.
 - Specific CVE queries: ANSWER after first search if found, else try broader search then ANSWER
 - Explanation queries (explain XSS, code examples): ANSWER after 1-2 searches collect documents
 - List/filter queries (list vulnerabilities, packages with X): ANSWER after first search returns 1+ results
-- **Coverage/Percentage queries** (what % have X, Y, Z): ONE search with has_advisory:true + facet_by="advisory_chunks.section" → calculate percentages manually from results
+- **Coverage/Percentage queries** (what % have X, Y, Z): ONE search with has_advisory:true + filter_by="advisory_chunks.section:!=''" → calculate percentages manually from results
 - If results < 3 after 2 attempts, synthesize answer from what you have (better than infinite retry loop)
 
 === DATA SCHEMA & AVAILABLE INFORMATION ===
@@ -579,6 +579,10 @@ def get_react_iteration_prompt(
                     scratchpad += f"  {field} Counts:\n"
                     for count_item in agg_data["counts"][:10]:  # Top 10
                         scratchpad += f"    - {count_item.get('value', 'N/A')}: {count_item.get('count', 0)} vulnerabilities\n"
+        
+        scratchpad += f"\n📊 STATUS: You have collected {len(collected_aggregations_data)} aggregation field(s) with statistical data.\n"
+        scratchpad += f"   For analytical queries, you can now provide a Final Answer using this aggregation data.\n"
+        scratchpad += f"   Alternatively, search once more for document examples to enhance the answer with specific CVE details.\n"
     
     # Add actual document details
     if collected_documents_data:
@@ -624,18 +628,21 @@ You have collected:
 - {aggregations_collected} aggregation fields
 - {len(previous_searches)} searches completed so far
 
-{("🛑 THIS IS YOUR FINAL ITERATION - YOU MUST PROVIDE 'Final Answer:' WITH A COMPLETE ANSWER NOW") if is_final_iteration else ""}
+{("🛑 THIS IS YOUR FINAL ITERATION - YOU MUST PROVIDE 'Final Answer:' WITH A COMPLETE ANSWER NOW (using aggregations if no documents, or combining both)") if is_final_iteration else ""}
+
+DECISION LOGIC:
+
+🛑 **FINAL ITERATION**: MUST answer now using aggregations + documents (no more searches)
+📊 **HAVE AGGREGATIONS**: Can answer now OR search once more for document examples (choose wisely)
+📄 **HAVE DOCUMENTS**: Answer with full context immediately
+❌ **HAVE NEITHER**: Try different search, then answer
 
 MANDATORY RULES:
-1. If you have enough information to answer → YOU MUST provide "Final Answer:"
-2. If you have 1+ documents with advisory content → YOU MUST provide "Final Answer:"
-3. If you have aggregation data → YOU MUST provide "Final Answer:"
-4. DO NOT search again if you already have relevant data
-5. ⚠️ DO NOT repeat ANY search from the "🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT" list above
+1. ⚠️ DO NOT repeat ANY search from the "🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT" list above
    - If you suggest one anyway, it WILL be silently skipped (wasting your iteration)
    - To try a new search, CHANGE: search_type, query, filters, or constraints
 6. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
-{("⚠️ THIS IS YOUR FINAL ITERATION - YOU CANNOT SEARCH ANYMORE. PROVIDE FINAL ANSWER WITH YOUR BEST SYNTHESIS OF COLLECTED DATA.") if is_final_iteration else ""}
+{("🛑 FINAL ITERATION WARNING - YOU MUST ANSWER NOW:\n   ❌ NO MORE SEARCHES ALLOWED\n   ✅ MUST provide Final Answer using collected aggregations/documents\n   ✅ If only aggregations available, answer with statistical insights and analysis\n   ✅ Do NOT apologize or say you need more data - synthesize what you have") if is_final_iteration else ""}
 
 ⚠️ SEARCH COUNT WARNING: You have done {len(previous_searches)} search(es).
 {f"↳ You have {2 - len(previous_searches)} search(es) remaining before you MUST answer" if len(previous_searches) < 2 else "↳ You have EXHAUSTED your search budget. PROVIDE FINAL ANSWER NOW."}

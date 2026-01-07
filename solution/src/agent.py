@@ -122,10 +122,10 @@ class VulnerabilityAgent:
         suggestions and optimizations. The agent remains the decision-maker and can override
         these strategies if they don't yield results or don't match the query intent.
         
-        Current heuristic:
-        - "documented/advisory/detailed" → filter to CVEs with advisory chunks
-          - Optional refinement: if query also mentions specific section keywords,
-            further filter to that section (e.g., "remediation", "details")
+        Current heuristics:
+        - Section-specific queries: Detects keywords (testing, remediation, best practices, details)
+          and pre-executes targeted search filtered to that advisory section
+        - General advisory queries: "documented/advisory/detailed" → filter to CVEs with advisory chunks
         
         Filter Syntax:
         - Typesense nested array filtering uses: field.{filter_conditions}
@@ -137,63 +137,76 @@ class VulnerabilityAgent:
         """
         q_lower = user_question.lower()
         
-        # Check for documentation/advisory requests
-        has_documented = any(w in q_lower for w in [
-            "well-documented", "well documented", "documented", 
-            "advisory", "detailed", "comprehensive"
+        # Check for section-specific keywords (primary heuristics)
+        has_remediation = any(w in q_lower for w in [
+            "remediation", "remediate", "fix", "fixed", "solution", "mitigation", "patch"
+        ])
+        has_testing = any(w in q_lower for w in [
+            "testing", "test", "verify", "verification", "how to test", "test case"
+        ])
+        has_best_practices = any(w in q_lower for w in [
+            "best practice", "best practices", "recommendation", "secure coding", "security best"
+        ])
+        has_details = any(w in q_lower for w in [
+            "detail", "details", "information", "overview", "vulnerability details"
         ])
         
-        # Check for specific section interests (optional refinements)
-        has_remediation = any(w in q_lower for w in ["remediation", "fix", "solution", "mitigation"])
-        has_testing = any(w in q_lower for w in ["testing", "test cases", "test case", "verification", "how to test"])
-        has_best_practices = any(w in q_lower for w in ["best practice", "recommendation", "secure coding", "security best"])
-        has_details = any(w in q_lower for w in ["detail", "information", "overview", "vulnerability details"])
+        # Check for general documentation/advisory requests (secondary heuristic)
+        has_documented = any(w in q_lower for w in [
+            "well-documented", "well documented", "documented", 
+            "advisory", "comprehensive"
+        ])
         
-        # Heuristic: Query mentions documented/advisory content
-        # Generalized to cover any "documented" query, with optional section refinement
-        if has_documented:
-            logger.info("📋 HEURISTIC 1: Documented/advisory content pattern detected")
-            logger.info("   → Pre-executing advisory filter search to boost precision")
-            
-            # Build filter: base requirement is CVEs with advisory chunks
-            base_filter = "has_advisory:true"
-            
-            # Optional refinement: if query also mentions a specific section type, add it
-            section_filter = None
-            if has_remediation:
-                section_filter = "advisory_chunks.{section:=remediation}"
-                logger.info("   → Further filtering to remediation sections")
-            elif has_testing:
-                section_filter = "advisory_chunks.{section:=testing}"
-                logger.info("   → Further filtering to testing sections")
-            elif has_best_practices:
-                section_filter = "advisory_chunks.{section:=best_practices}"
-                logger.info("   → Further filtering to best practices sections")
-            elif has_details:
-                section_filter = "advisory_chunks.{section:=details}"
-                logger.info("   → Further filtering to detail sections")
-            
-            # Combine filters
-            additional_filters = f"{base_filter} && {section_filter}" if section_filter else base_filter
-            
-            result = self.search_tool.search_vulnerabilities(
-                query="*",
-                search_type="keyword",
-                additional_filters=additional_filters,
-                facet_by="vulnerability_type,severity,ecosystem",
-                per_page=20
-            )
-            
-            facet_str = "vulnerability_type,severity,ecosystem" if not section_filter else "vulnerability_type,severity"
-            state.search_history.append((f"keyword (advisory)", "*", result.total_found))
-            state.aggregations_collected = result.aggregations or {}
-            
-            if result.documents:
-                for doc in result.documents:
-                    cve_id = doc.get("cve_id") or doc.get("id")
-                    state.documents_collected[cve_id] = doc
-            
-            logger.info(f"✅ Heuristic search: {result.total_found} CVEs with detailed advisories found")
+        # Determine which section to search for
+        section_filter = None
+        section_name = None
+        
+        if has_remediation:
+            section_filter = "advisory_chunks.{section:=remediation}"
+            section_name = "remediation"
+        elif has_testing:
+            section_filter = "advisory_chunks.{section:=testing}"
+            section_name = "testing"
+        elif has_best_practices:
+            section_filter = "advisory_chunks.{section:=best_practices}"
+            section_name = "best_practices"
+        elif has_details:
+            section_filter = "advisory_chunks.{section:=details}"
+            section_name = "details"
+        elif has_documented:
+            # General advisory request without specific section
+            section_name = "advisory"
+        else:
+            # No heuristic applies
+            return
+        
+        # Build and execute heuristic search
+        base_filter = "has_advisory:true"
+        additional_filters = f"{base_filter} && {section_filter}" if section_filter else base_filter
+        
+        logger.info(f"📋 HEURISTIC: {section_name.upper()} section pattern detected")
+        logger.info(f"   → Pre-executing advisory filter search (section={section_name})")
+        
+        result = self.search_tool.search_vulnerabilities(
+            query="*",
+            search_type="keyword",
+            additional_filters=additional_filters,
+            facet_by="vulnerability_type,severity,ecosystem",
+            per_page=20
+        )
+        
+        state.search_history.append((f"keyword (advisory)", "*", result.total_found))
+        state.aggregations_collected = result.aggregations or {}
+        
+        if result.documents:
+            for doc in result.documents:
+                cve_id = doc.get("cve_id") or doc.get("id")
+                state.documents_collected[cve_id] = doc
+        
+        if result.total_found > 0:
+            logger.info(f"✅ Heuristic search: {result.total_found} CVEs with {section_name} sections found")
+        else:
+            logger.info(f"⚠️  Heuristic search found 0 results for {section_name} - agent will refine")
 
     def answer_question(self, user_question: str) -> str:
         """Answer user question using ReAct pattern (Reasoning + Acting).
