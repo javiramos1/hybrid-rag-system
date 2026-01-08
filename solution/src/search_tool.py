@@ -349,10 +349,31 @@ class VulnerabilitySearchTool:
             for group in response.get("grouped_hits", []):
                 group_docs = group.get("hits", [])
                 for hit in group_docs:
-                    documents.append(hit["document"])
+                    doc = hit["document"].copy()
+                    # Preserve scores from hit metadata
+                    if "text_match" in hit:
+                        doc["_text_match"] = hit["text_match"]
+                        logger.debug(f"Added _text_match={hit['text_match']} to {doc.get('cve_id')}")
+                    if "vector_distance" in hit:
+                        doc["_vector_distance"] = hit["vector_distance"]
+                        logger.debug(f"Added _vector_distance={hit['vector_distance']} to {doc.get('cve_id')}")
+                    documents.append(doc)
         else:
             hits = response.get("hits", [])
-            documents = [hit["document"] for hit in hits]
+            documents = []
+            for hit in hits:
+                doc = hit["document"].copy()
+                # Preserve scores from hit metadata
+                if "text_match" in hit:
+                    doc["_text_match"] = hit["text_match"]
+                    logger.debug(f"Added _text_match={hit['text_match']} to {doc.get('cve_id')}")
+                if "vector_distance" in hit:
+                    doc["_vector_distance"] = hit["vector_distance"]
+                    logger.debug(f"Added _vector_distance={hit['vector_distance']} to {doc.get('cve_id')}")
+                documents.append(doc)
+        
+        # Normalize text_match scores (BM25) to 0-1 range using min-max normalization
+        documents = self._normalize_text_match_scores(documents)
 
         logger.debug(f"Returned {len(documents)} documents out of {response.get('found', 0)} found")
 
@@ -552,3 +573,91 @@ class VulnerabilitySearchTool:
                     aggregations[field_name] = facet_data
 
         return aggregations
+
+    def _normalize_text_match_scores(
+        self, documents: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Normalize BM25 text_match scores using Z-score normalization.
+        
+        Why Z-score (standardization)?
+        - BM25 scores are unbounded and highly skewed (some very large, some zero)
+        - Z-score: (score - mean) / std_dev, centers around 0 with std_dev of 1
+        - Better than L2 when scores have extreme outliers (like BM25 can produce)
+        - Recommended by OpenSearch for hybrid search with highly variable score ranges
+        - Formula: z_score = (x - mean) / std_dev
+        - Then: normalized = (z_score + 3) / 6 to map to approximately [0, 1]
+          (since ~99.7% of z-scores fall in [-3, 3] by 68-95-99.7 rule)
+        
+        Special case: Single result
+        - If only 1 document, assign it 1.0 (perfect match for that query)
+        - If all scores identical, assign 0.5 (neutral/middle score)
+        
+        Args:
+            documents: List of documents with optional _text_match field
+            
+        Returns:
+            Same documents with _text_match scores normalized using Z-score
+        """
+        import statistics
+        import math
+        
+        # Collect all text_match scores
+        scores = [
+            doc["_text_match"]
+            for doc in documents
+            if "_text_match" in doc and isinstance(doc["_text_match"], (int, float))
+        ]
+        
+        if not scores:
+            # No scores to normalize (filter-only query, no text match)
+            # Assign default score of 1.0 to all documents (equal relevance)
+            logger.debug("No text_match scores found; assigning default score of 1.0 to all documents")
+            for doc in documents:
+                if "_text_match" not in doc:
+                    doc["_text_match"] = 1.0
+            return documents
+        
+        if len(scores) == 1:
+            # Single result: assign perfect score
+            logger.debug("Single result found; normalizing text_match to 1.0")
+            for doc in documents:
+                if "_text_match" in doc:
+                    doc["_text_match"] = 1.0
+            return documents
+        
+        # Calculate mean and standard deviation for 2+ scores
+        mean_score = statistics.mean(scores)
+        try:
+            std_dev = statistics.stdev(scores)
+        except statistics.StatisticsError:
+            # All scores are identical
+            logger.debug("All text_match scores identical; normalizing to 0.5")
+            for doc in documents:
+                if "_text_match" in doc:
+                    doc["_text_match"] = 0.5
+            return documents
+        
+        if std_dev == 0:
+            # Shouldn't happen if we got here, but be safe
+            logger.debug("Zero standard deviation; normalizing to 0.5")
+            for doc in documents:
+                if "_text_match" in doc:
+                    doc["_text_match"] = 0.5
+            return documents
+        
+        # Apply Z-score normalization, then map to [0, 1] range
+        # Using shift: (z + 3) / 6 maps approximately [-3, 3] to [0, 1]
+        for doc in documents:
+            if "_text_match" in doc:
+                original = doc["_text_match"]
+                z_score = (original - mean_score) / std_dev
+                # Map z_score from ~[-3, 3] to [0, 1]
+                normalized = max(0.0, min(1.0, (z_score + 3) / 6))
+                doc["_text_match"] = normalized
+                logger.debug(
+                    f"Z-normalized text_match for {doc.get('cve_id')}: "
+                    f"{original} -> z={z_score:.4f} -> norm={normalized:.4f}"
+                )
+        
+        return documents
+

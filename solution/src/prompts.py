@@ -221,7 +221,6 @@ CRITICAL STOPPING LOGIC:
 🛑 **ONE SEARCH IS USUALLY ENOUGH**:
    - Got 1+ documents matching the query? → ANSWER IMMEDIATELY
    - Got aggregations for a counting query? → ANSWER IMMEDIATELY
-   - Found the specific CVE user asked about? → ANSWER IMMEDIATELY
    - Got relevant documents for explanation query? → ANSWER IMMEDIATELY
 
 🛑 **ONLY SEARCH AGAIN IF**:
@@ -230,6 +229,23 @@ CRITICAL STOPPING LOGIC:
    - Maximum 2 total searches - then ANSWER regardless
 
 🛑 **NEVER SEARCH A THIRD TIME** - Answer with what you have
+
+=== CONFIDENCE THRESHOLD ===
+
+✅ **ANSWER IF**: Search returned 3+ documents OR aggregations matching the question type
+⚠️ **ANSWER WITH LIMITS IF**: Search returned 1-2 documents (say "Limited data:" prefix)
+❌ **DON'T ANSWER IF**: Search returned 0 results → Say "I don't have data on this"
+
+=== HALLUCINATION PREVENTION ===
+
+❌ **NEVER**: Claim facts not in search results
+❌ **NEVER**: Say "typically", "usually", "generally" without data
+❌ **NEVER**: Mention versions/dates/numbers not from documents
+❌ **NEVER**: Describe attack methods not in advisories
+
+✅ **DO**: Acknowledge limitations ("Our dataset has 47 CVEs...")
+✅ **DO**: Cite only CVEs found in search results
+✅ **DO**: Quote exact fields from documents
 
 PRIORITIZATION:
 - **Analytical/Numerical Data**: ALWAYS use keyword search + aggregations (num/cat fields). Ignore semantic results.
@@ -515,7 +531,6 @@ Use markdown formatting (headers, bullet points, code blocks with language tags)
 1. Explain what was searched (filters, query terms, vulnerability types)
 2. Suggest why no results exist
 3. Offer alternative queries to try
-4. List valid search parameters (ecosystems: npm/pip/maven; severity: Critical/High/Medium/Low; types: XSS/SQL Injection/RCE; CVE-YYYY-*)
 
 **For Ambiguous Queries (include):**
 1. Clarify what interpretation you searched for
@@ -652,24 +667,28 @@ def get_react_iteration_prompt(
                     scratchpad += f"  {field} Counts:\n"
                     for count_item in agg_data["counts"][:20]:  # Top 20
                         scratchpad += f"    - {count_item.get('value', 'N/A')}: {count_item.get('count', 0)} vulnerabilities\n"
-        
-        scratchpad += f"\n🎯 AGGREGATION DATA:\n"
-        scratchpad += f"   ✅ You have complete statistical data for the user's query\n"
-        scratchpad += f"   ✅ For analytical/counting queries, this is ALL you need\n"
-        scratchpad += f"   ✅ You can optionally search ONCE MORE for specific CVE examples to enrich the answer\n"
-        scratchpad += f"   ✅ But you ALREADY have sufficient data to provide a complete answer\n"
+    
     
     # Add actual document details
     if collected_documents_data:
         scratchpad += f"\n{'='*80}\nCollected CVE Documents ({documents_collected} total):\n"
-        scratchpad += f"\n🎯 DOCUMENT DATA:\n"
-        scratchpad += f"   ✅ You have {documents_collected} CVE document(s) with complete details\n"
-        scratchpad += f"   ✅ Each document contains: CVE ID, package, ecosystem, severity, CVSS, description, versions\n"
-        scratchpad += f"   ⚠️ DEFAULT ACTION: Provide 'Final Answer:' using these documents NOW\n"
-        scratchpad += f"   ⚠️ Only search again if these documents are COMPLETELY wrong/irrelevant\n\n"
+        scratchpad += f"⭐ IMPORTANT: Documents are sorted by RELEVANCE SCORE (highest first).\n"
+        scratchpad += f"   - Score range: 0.0-1.0 (higher = more relevant to the query)\n"
+        scratchpad += f"   - PRIORITIZE information from documents with HIGH SCORES (0.7+)\n"
+        scratchpad += f"   - Use lower-scoring documents (0.3-0.7) only for context/confirmation\n"
+        scratchpad += f"   - Ignore or minimize documents with LOW SCORES (<0.3) unless essential\n"
         
         for idx, (cve_id, doc) in enumerate(list(collected_documents_data.items())[:20], 1):  # Limit to 20 for token efficiency
-            scratchpad += f"\n{idx}. CVE: {cve_id}\n"
+            # Get scores for display
+            text_match = doc.get('_text_match', 1.0)
+            vector_dist = doc.get('_vector_distance')
+            
+            # Format score display
+            score_display = f"{text_match:.4f}"
+            if vector_dist is not None:
+                score_display += f" (semantic: {vector_dist:.4f})"
+            
+            scratchpad += f"\n{idx}. CVE: {cve_id} [SCORE: {score_display}] ⭐\n"
             scratchpad += f"   Package: {doc.get('package_name', 'N/A')}\n"
             scratchpad += f"   Ecosystem: {doc.get('ecosystem', 'N/A')}\n"
             scratchpad += f"   Severity: {doc.get('severity', 'N/A')}\n"
@@ -690,22 +709,11 @@ def get_react_iteration_prompt(
         if documents_collected > 20:
             scratchpad += f"\n... and {documents_collected - 20} more documents\n"
     
-    # Build the ReAct format prompt
-    prompt = f"""Use the following format:
-
-Thought: you should always think about what to do
-Action: the action to take, should be one of [search_vulnerabilities]
-Action Input: the input parameters for the action
-Observation: the result of the action
-Thought: reflect on the observations
-... (this Thought/Action/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: <COMPLETE COMPREHENSIVE ANSWER WITH ALL CITATIONS AND FORMATTING>
-
-Question: {user_question}{scratchpad}
+    # Build the iteration prompt (ReAct pattern already defined in system prompt, no need to repeat)
+    prompt = f"""Question: {user_question}
 
 {'='*80}
-CRITICAL DECISION POINT - Iteration {iteration}:
+Iteration {iteration}:
 
 You have collected:
 - {documents_collected} CVE documents
@@ -726,10 +734,8 @@ DECISION LOGIC:
 MANDATORY RULES:
 1. ⚠️ If you have ANY documents or aggregations, DEFAULT to answering (don't search unnecessarily)
 2. ⚠️ DO NOT repeat ANY search from the "🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT" list above
-   - If you suggest one anyway, it WILL be silently skipped (wasting your iteration)
    - To try a new search, CHANGE: search_type, query, filters, or constraints
 3. ⚠️ After 2 searches, you MUST answer (no "I need more data" - synthesize what you have)
-4. DO NOT respond with "Action:", "Thought:", "Action Input:" - ONLY "Final Answer:" or function call
 {("🛑 FINAL ITERATION WARNING - YOU MUST ANSWER NOW:\n   ❌ NO MORE SEARCHES ALLOWED\n   ✅ MUST provide Final Answer using collected aggregations/documents\n   ✅ If only aggregations available, answer with statistical insights and analysis\n   ✅ Do NOT apologize or say you need more data - synthesize what you have") if is_final_iteration else ""}
 
 ⚠️ SEARCH COUNT WARNING: You have done {len(previous_searches)} search(es).
@@ -759,8 +765,12 @@ IF YOU PROVIDE FINAL ANSWER:
 - Generate the COMPLETE, COMPREHENSIVE answer immediately after the prefix
 - Include ALL elements: CVE IDs, CVSS scores, packages, ecosystems, versions, code examples, remediation steps
 - Use markdown formatting (headers ##, bullets, code blocks)
-- End with grounding statement: "Source: X CVE records from the vulnerability database"
 - DO NOT respond with ReAct format ("Thought:", "Action:") - provide the FINAL ANSWER NOW
+
+SCRATCHPAD (Search History & Collected Data):
+{scratchpad}
+
+---
 
 Next step (MUST be either function call OR "Final Answer: <complete answer>"):"""
     return prompt

@@ -219,6 +219,126 @@ class VulnerabilityAgent:
         else:
             logger.info(f"⚠️  Heuristic search found 0 results for {section_name} - agent will refine")
 
+    def _set_document_scores(self, documents: list) -> None:
+        """Set _score field to the fusion rank score from Typesense.
+        
+        For hybrid search, Typesense's _text_match is the fusion score (already Z-score normalized).
+        For keyword/semantic searches, _text_match is the raw BM25 score (normalized by search_tool).
+        
+        We simply alias _text_match to _score for consistent sorting/filtering/display everywhere.
+        Documents without scores get default _score of 1.0.
+        
+        Args:
+            documents: List of document dictionaries (modified in-place)
+        """
+        for doc in documents:
+            # Use the fusion score from Typesense (already normalized to 0-1 range)
+            fusion_score = doc.get("_text_match", 1.0)  # Default 1.0 for non-scored searches
+            doc["_score"] = fusion_score
+
+    def _sort_documents_by_score(self, documents_dict: dict) -> dict:
+        """Sort documents by relevance score (highest first).
+        
+        Documents already have a normalized combined score (_score field) computed during collection.
+        This method simply sorts by that score in descending order.
+        
+        Args:
+            documents_dict: Dictionary of CVE ID -> document
+            
+        Returns:
+            OrderedDict sorted by score descending (highest first)
+        """
+        def get_sort_key(item):
+            cve_id, doc = item
+            score = doc.get("_score", 1.0)
+            # Return negative for descending sort (highest scores first)
+            return -score
+        
+        # Sort by the combined score
+        sorted_items = sorted(documents_dict.items(), key=get_sort_key)
+        
+        # Return as ordered dict
+        from collections import OrderedDict
+        return OrderedDict(sorted_items)
+
+    def _filter_documents_by_score(self, sorted_documents: dict) -> dict:
+        """Filter documents by MIN_SCORE and MAX_GAP thresholds.
+        
+        Two-stage filtering using the normalized _score field:
+        1. MIN_SCORE: Remove documents with score < min_score
+        2. MAX_GAP: If gap between consecutive scores > max_gap, remove that doc and all after
+        
+        This removes noise: high-scoring docs vs. low-scoring docs are separated cleanly.
+        
+        Args:
+            sorted_documents: OrderedDict of CVE ID -> document (must be pre-sorted by _score)
+            
+        Returns:
+            OrderedDict with filtered documents
+        """
+        from collections import OrderedDict
+        
+        if not sorted_documents:
+            return OrderedDict()
+        
+        # Check if all documents have default scores (1.0) - indicates no real scoring data
+        has_real_scores = False
+        for cve_id, doc in sorted_documents.items():
+            score = doc.get("_score", 1.0)
+            if score != 1.0:
+                has_real_scores = True
+                break
+        
+        if not has_real_scores:
+            logger.info(
+                f"📊 No relevance scores available (default 1.0 for all {len(sorted_documents)} docs) - "
+                f"skipping score-based filtering"
+            )
+            return sorted_documents
+        
+        # Stage 1: Filter by MIN_SCORE
+        stage1_filtered = OrderedDict()
+        for cve_id, doc in sorted_documents.items():
+            score = doc.get("_score", 0.0)
+            if score >= self.config.min_score:
+                stage1_filtered[cve_id] = doc
+        
+        if not stage1_filtered:
+            return OrderedDict()
+        
+        # Stage 2: Filter by MAX_GAP (remove noise - stop where large gap appears)
+        stage2_filtered = OrderedDict()
+        previous_score = None
+        
+        for cve_id, doc in stage1_filtered.items():
+            score = doc.get("_score", 0.0)
+            
+            if previous_score is not None:
+                gap = previous_score - score
+                if gap > self.config.max_gap:
+                    # Gap too large - this and all following docs are noise, stop here
+                    break
+            
+            stage2_filtered[cve_id] = doc
+            previous_score = score
+        
+        # Log if documents were filtered
+        initial_count = len(sorted_documents)
+        final_count = len(stage2_filtered)
+        
+        if final_count < initial_count:
+            removed_count = initial_count - final_count
+            min_score_removed = len(sorted_documents) - len(stage1_filtered)
+            gap_removed = len(stage1_filtered) - len(stage2_filtered)
+            
+            logger.info(
+                f"📊 Document filtering applied: {initial_count} → {final_count} "
+                f"({removed_count} removed: {min_score_removed} below MIN_SCORE={self.config.min_score}, "
+                f"{gap_removed} filtered by MAX_GAP={self.config.max_gap})"
+            )
+        
+        return stage2_filtered
+
     def answer_question(self, user_question: str) -> AgentResponse:
         """Answer user question using ReAct pattern (Reasoning + Acting).
 
@@ -265,11 +385,19 @@ class VulnerabilityAgent:
                 prompt_content = user_question
             else:
                 is_final_iteration = state.iteration >= self.config.max_react_iterations
+                
+                # Sort documents by score (highest first) before sending to LLM
+                sorted_docs = self._sort_documents_by_score(state.documents_collected)
+                
+                # Filter documents by MIN_SCORE and MAX_GAP to remove noise
+                filtered_docs = self._filter_documents_by_score(sorted_docs)
+                logger.info(f"📊 After filtering: {len(filtered_docs)} documents (MIN_SCORE={self.config.min_score}, MAX_GAP={self.config.max_gap})")
+                
                 prompt_content = get_react_iteration_prompt(
                     user_question, 
                     state.iteration, 
                     state.search_history,
-                    state.documents_collected,  # Pass actual documents
+                    filtered_docs,  # Pass filtered documents
                     state.aggregations_collected,  # Pass actual aggregations
                     search_parameters=state.search_parameters,  # Pass search parameters for clarity
                     is_final_iteration=is_final_iteration  # Signal final iteration
@@ -317,6 +445,11 @@ class VulnerabilityAgent:
 
         result = state.final_answer or "Could not generate answer."
         
+        # Before generating debug info, ensure scores are preserved in state.documents_collected
+        # (they may have been added during sorting/filtering but not persisted back)
+        # sorted_docs = self._sort_documents_by_score(state.documents_collected)
+        # state.documents_collected = sorted_docs
+        
         # Generate debug information
         state.search_debug_info = self._format_debug_info(state)
         
@@ -332,6 +465,12 @@ class VulnerabilityAgent:
         
         logger.info(f"Chat history size: {len(self.chat_history)}/{self.config.max_chat_history}")
         logger.info(f"\n✅ Final answer ({len(result)} chars)\n\n")
+        
+        # Add data scope statement to final answer
+        num_docs = len(state.documents_collected)
+        scope_statement = f"\n\n---\n📊 *Based on {num_docs} CVE document(s) from our 47-record dataset*"
+        result = result + scope_statement
+        
         return AgentResponse(answer=result, debug_info=state.search_debug_info)
 
     def _format_debug_info(self, state: IterationState) -> str:
@@ -367,12 +506,16 @@ class VulnerabilityAgent:
             docs_to_show = dict(list(state.documents_collected.items())[:5])
             
             for cve_id, doc in docs_to_show.items():
-                output.append(f"\n  {cve_id}:")
+                # Get the normalized combined score (computed during collection)
+                score = doc.get("_score", 1.0)
+                score_display = f" | score: {score:.4f}"
                 
-                # Show all fields except embeddings
+                output.append(f"\n  {cve_id}{score_display}:")
+                
+                # Show all fields except embeddings and score metadata
                 for field, value in doc.items():
-                    # Skip embeddings field
-                    if field == "question_embedding" or "embedding" in field.lower():
+                    # Skip embeddings and internal score fields (already shown above)
+                    if field == "question_embedding" or "embedding" in field.lower() or field.startswith("_"):
                         continue
                     
                     # Special handling for 'content' field - show only 50 chars
@@ -500,17 +643,26 @@ class VulnerabilityAgent:
             "results_found": search_result.total_found,
         })
 
+        if search_result.documents:
+            self._set_document_scores(search_result.documents)
+
         # Collect unique documents
         if search_result.documents:
             for doc in search_result.documents:
                 cve_id = doc.get("cve_id")
                 if cve_id and cve_id not in state.documents_collected:
                     state.documents_collected[cve_id] = doc
-                    logger.info(f"📥 Collected document: {cve_id}")
+                    score = doc.get("_score", 1.0)
+                    logger.info(f"📥 Collected document: {cve_id} | score: {score:.4f}")
                     logger.debug(f"   - fixed_version: {doc.get('fixed_version')}")
+
                     logger.debug(f"   - affected_versions: {doc.get('affected_versions')}")
                     logger.debug(f"   - package_name: {doc.get('package_name')}")
                     logger.debug(f"   - has_advisory: {doc.get('has_advisory')}")
+                    if doc.get("_text_match") is not None:
+                        logger.debug(f"   - text_match: {doc.get('_text_match')}")
+                    if doc.get("_vector_distance") is not None:
+                        logger.debug(f"   - vector_distance: {doc.get('_vector_distance'):.4f}")
 
         # Collect aggregations (for statistics queries)
         if search_result.aggregations:

@@ -272,6 +272,51 @@ GEMINI_MODEL=gemini-3-flash-preview
 VECTOR_SEARCH_K=100          # neighbors for vector search
 HYBRID_SEARCH_ALPHA=0.5      # 0=keyword-only, 1=vector-only
 LOG_LEVEL=INFO
+
+# Score-based document filtering
+MIN_SCORE=0.3                # Minimum relevance score (0-1) to include a document
+MAX_GAP=0.2                  # Maximum score gap between consecutive documents (removes noise)
+```
+
+**Score Filtering Details:**
+
+The agent applies two-stage filtering after sorting documents by relevance score:
+
+1. **MIN_SCORE** (default: 0.3): Removes all documents with combined score below this threshold. This filters out marginally relevant results.
+
+2. **MAX_GAP** (default: 0.2): Detects and removes "noise" documents. If the gap between consecutive document scores exceeds MAX_GAP, that document and all following documents are removed. This is useful when there's a clear separation between highly relevant and marginally relevant documents (e.g., score drops from 0.8 to 0.5, gap of 0.3 exceeds threshold).
+
+**Score Calculation:**
+
+Each document receives a combined score using Z-score normalization:
+
+```
+combined_score = (text_match * 0.6) + ((1.0 - vector_distance) * 0.4)
+```
+
+Where:
+- `text_match` (0-1): BM25 keyword relevance, normalized using Z-score (see below)
+- `vector_distance` (0-1): Cosine distance to query embedding, inverted so lower distance = higher score
+- Weights: 60% keyword relevance, 40% semantic similarity
+
+**Z-Score Normalization for BM25:**
+
+BM25 scores from Typesense are unbounded integers. We normalize them using Z-score (standardization):
+
+$$\text{z-score} = \frac{\text{score} - \mu}{\sigma}$$
+
+Then map to [0, 1] range using:
+
+$$\text{normalized} = \max(0.0, \min(1.0, \frac{\text{z-score} + 3}{6}))$$
+
+This uses the 68-95-99.7 rule (±3σ covers 99.7% of normal distribution) and is the industry-recommended approach for normalizing BM25 scores in hybrid search (used by OpenSearch, Elasticsearch, etc).
+
+**Logging:**
+
+When documents are filtered, the agent logs at INFO level:
+
+```
+📊 Document filtering applied: 5 → 3 (2 removed: 0 below MIN_SCORE=0.3, 2 filtered by MAX_GAP=0.2)
 ```
 
 All commands in this repo are designed to run via the Makefile so environment loading and Docker orchestration remain consistent.

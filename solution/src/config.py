@@ -54,6 +54,13 @@ class Config:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     """Sentence transformer model for embeddings. Override with EMBEDDING_MODEL env var."""
 
+    # ========== Score-based Document Filtering ==========
+    min_score: float = 0.4
+    """Minimum relevance score (0-1) to include a document. Lower scores filtered out. Override with MIN_SCORE env var."""
+
+    max_gap: float = 0.2
+    """Maximum score gap between consecutive documents. Documents with larger gaps removed as noise. Override with MAX_GAP env var."""
+
     # ========== Data Ingestion ==========
     task_dir: Path = None  # type: ignore
     """Path to task data directory (advisories, CSVs). Override with INGESTION_TASK_DIR env var."""
@@ -100,6 +107,13 @@ class Config:
 
         embedding_model = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
+        # Optional: Score-based document filtering (with defaults)
+        try:
+            min_score = float(os.getenv("MIN_SCORE", "0.4"))
+            max_gap = float(os.getenv("MAX_GAP", "0.2"))
+        except ValueError as e:
+            raise ValueError(f"Invalid float env var for MIN_SCORE or MAX_GAP: {e}")
+
         # Optional: Data ingestion path (with default)
         task_dir = Path(os.getenv("INGESTION_TASK_DIR", "../task"))
 
@@ -114,6 +128,8 @@ class Config:
             max_chat_history=max_chat_history,
             vector_search_k=vector_search_k,
             embedding_model=embedding_model,
+            min_score=min_score,
+            max_gap=max_gap,
             task_dir=task_dir,
         )
 
@@ -123,7 +139,7 @@ class Config:
             f"Config(gemini_model={self.gemini_model}, "
             f"typesense_host={self.typesense_host}:{self.typesense_port}, "
             f"max_react_iterations={self.max_react_iterations}, "
-            f"max_retries={self.max_retries}, "
+            f"min_score={self.min_score}, max_gap={self.max_gap}, "
             f"vector_search_k={self.vector_search_k}, "
             f"task_dir={self.task_dir})"
         )
