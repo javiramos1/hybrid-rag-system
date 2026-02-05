@@ -236,18 +236,16 @@ This ensures you're using current APIs, not outdated patterns.
 | `solution/src/logger.py` | Structured logging utilities |
 | `solution/src/config.py` | Configuration and environment variable management |
 | `solution/tests/` | 48 comprehensive tests (unit + integration) |
-| `task/ASSIGNMENT.md` | Original assignment requirements |
 
 ## Folder Structure
 
 ```
-task/                          # Challenge data (reference only)
-├── ASSIGNMENT.md              # Original requirements
-├── README.md                  # Dataset overview
+data/                          # Data files
 ├── vulnerabilities.csv        # 47 CVE records
 ├── packages.csv               # Package metadata
 ├── vulnerability_types.csv    # Vulnerability classifications
 ├── severity_levels.csv        # CVSS severity mappings
+└── advisories/                # Security advisory markdown files
 └── advisories/                # 8 security advisory markdown files
 
 solution/                      # ✅ COMPLETE IMPLEMENTATION

@@ -119,7 +119,7 @@ docker-status: ## Show Docker container status
 
 ## Development Tasks
 
-test: install-dev ## Run test suite
+test: ## Run test suite
 	@echo "$(YELLOW)Running unit tests...$(NC)"
 	@if [ -f .env ]; then \
 		. ./.env; \
@@ -162,7 +162,7 @@ ingest: docker-up ## Run data ingestion pipeline
 	fi
 	@if [ -f .env ]; then \
 		. ./.env; \
-		export GOOGLE_API_KEY TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
+		export GOOGLE_API_KEY TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_DATA_DIR; \
 	fi; \
 	$(VENV_PYTHON) src/ingest.py
 	@echo "$(GREEN)✓ Data ingestion complete$(NC)"
@@ -171,7 +171,7 @@ run: docker-up ## Run interactive CLI
 	@echo "$(BLUE)Starting interactive CLI...$(NC)"
 	@if [ -f .env ]; then \
 		. ./.env; \
-		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
+		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_DATA_DIR; \
 	fi; \
 	$(VENV_PYTHON) main.py
 
@@ -184,7 +184,7 @@ query: docker-up ## Run single query (usage: make query Q='your question' [D=1 f
 	@echo "$(BLUE)Running query: $(Q)$(NC)"
 	@if [ -f .env ]; then \
 		. ./.env; \
-		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_TASK_DIR; \
+		export GOOGLE_API_KEY GEMINI_MODEL TYPESENSE_HOST TYPESENSE_PORT TYPESENSE_API_KEY INGESTION_DATA_DIR; \
 	fi; \
 	if [ "$(D)" = "1" ]; then \
 		$(VENV_PYTHON) main.py "$(Q)" --debug; \
@@ -264,7 +264,7 @@ zip: ## Create a distribution archive (tar.gz) excluding typesense-data, venv, c
 		--exclude='.env' \
 		--exclude='.DS_Store' \
 		--exclude='*.pyc' \
-		-czf hybrid-rag-system.tar.gz README.md solution/ task/ && \
+		-czf hybrid-rag-system.tar.gz README.md solution/ data/ && \
 	echo "$(GREEN)✓ Created hybrid-rag-system.tar.gz$$(du -h hybrid-rag-system.tar.gz | cut -f1)$(NC)" || \
 	echo "$(RED)✗ Failed to create archive$(NC)"
 

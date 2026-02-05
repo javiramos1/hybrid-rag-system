@@ -89,18 +89,16 @@ Format: "YYYY-MM-DD" (e.g., "2024-02-01").""",
                 },
                 "additional_filters": {
                     "type": "string",
-                    "description": """Raw Typesense filter expression for precise queries.
+                    "description": """Raw Typesense filter syntax for complex queries. See filter reference in system instructions.
 
-ADVISORY CHUNK FILTERS: "has_advisory:true", "advisory_chunks.{section:=remediation}", "advisory_chunks.{section:=testing}", "advisory_chunks.is_code:true"
-Combine with &&: "has_advisory:true && advisory_chunks.{section:=testing} && advisory_chunks.{section:=remediation}"
+CHUNK FILTERS (for advisory content):
+  "advisory_chunks.{section:=remediation}" → CVEs with remediation guidance
+  "advisory_chunks.{section:=testing}" → CVEs with testing documentation
+  "advisory_chunks.{is_code:=true}" → CVEs with code examples
+  Combine with has_advisory:true for better performance
 
-AFFECTED VERSIONS FILTERS (nested fields - use ONLY for version status queries):
-- "affected_versions_data.{status:=vulnerable}": Filter CVEs with vulnerable versions
-- Only use affected_versions_data for version status checks. For fixed version info, use fixed_version_exists parameter instead.
-
-OTHER FILTERS: "cvss_score:>=8.0", "cvss_score:<=9.0", "package_name:express-validator"
-
-See system instructions for complete details and examples.
+Examples: "package_name:express-validator", "has_advisory:true", "cvss_score:>=9.0"
+Combine: "package_name:express-validator && severity:Critical && has_advisory:true"
 """,
                 },
                 "facet_by": {
@@ -347,19 +345,30 @@ QUERY EXAMPLE (user asks for "well-documented with remediation"):
 ❌ DON'T: hybrid search for "remediation guidance" (returns all results, not filtered)
 ✅ DO: additional_filters="has_advisory:true && advisory_chunks.{section:=remediation}" (filters to actual advisory sections)
 
-AFFECTED VERSIONS FILTERING - TOP-LEVEL vs NESTED FIELDS:
+=== FILTER REFERENCE ===
 
-Each CVE document contains:
-- **Top-level fields** (from CSV): affected_versions (version range), fixed_version (first patched version)
-- **Nested field** (from advisory): affected_versions_data array with status info (vulnerable/safe/not affected)
+| Filter | Purpose | When to Use | Example |
+|--------|---------|------------|---------|
+| **cve_ids** | Specific CVE IDs | Find exact vulnerabilities | cve_ids=["CVE-2024-1234", "CVE-2024-5678"] |
+| **ecosystems** | npm, pip, maven | Filter by language/framework | ecosystems=["npm", "pip"] |
+| **severity_levels** | Critical, High, Medium, Low | Find by risk level | severity_levels=["Critical", "High"] |
+| **vulnerability_types** | XSS, SQL Injection, RCE, etc. | Find by attack type | vulnerability_types=["SQL Injection", "RCE"] |
+| **min_cvss_score** | Numeric 0.0-10.0 | Filter by CVSS threshold | min_cvss_score=8.0 |
+| **has_fix** | true/false | Show only patched/unpatched CVEs | has_fix=true |
+| **published_date_after** | YYYY-MM-DD format | Recent vulnerabilities | published_date_after="2024-01-01" |
+| **additional_filters** | Raw Typesense syntax | Advanced/complex filtering | See examples below |
 
-**WHEN TO USE:**
-- Top-level fields: "Show CVEs with fixes available" → Use fixed_version field (simple, fast)
-- Nested field: "Filter by version status" → Use affected_version_status parameter (vulnerable/safe/not affected)
+**ADDITIONAL_FILTERS EXAMPLES (Raw Typesense Syntax):**
+- Package filtering: `package_name:express-validator` (exact match, use for vendor-specific queries)
+- Advisory filtering: `has_advisory:true` (CVEs with detailed documentation)
+- Section filtering: `advisory_chunks.{section:=remediation}` (CVEs with remediation guidance)
+- CVSS range: `cvss_score:>=8.0 && cvss_score:<=9.5`
+- Combine filters: `package_name:express-validator && severity:Critical && has_advisory:true`
 
-**EXAMPLES:**
-- "Which vulnerabilities have patches?" → affected_version_status=["safe"] (shows versions marked as safe/patched)
-- "What is the fixed version of CVE-2024-1234?" → Use top-level fixed_version in results (already in response)
+⚠️ **CRITICAL - Package-Specific Queries:**
+For "Show all Critical vulnerabilities in express":
+❌ WRONG: query="express", severity_levels=["Critical"] (semantic match returns unrelated CVEs)
+✅ CORRECT: additional_filters="package_name:express-validator", severity_levels=["Critical"]
 
 DATASET FACTS:
 - **Total CVE documents indexed**: 47 vulnerabilities

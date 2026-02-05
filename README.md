@@ -1,10 +1,12 @@
 # Hybrid RAG System for Security Vulnerabilities
 
-A compact, production-minded hybrid RAG system that answers plain-English questions about security vulnerabilities by combining structured CVE metadata and unstructured advisory content. The implementation avoids high-level RAG frameworks; the core routing, retrieval and synthesis logic is implemented directly for clarity and auditability.
+A compact, production-minded hybrid RAG system that answers plain-English questions about security vulnerabilities by combining structured CVE metadata and unstructured advisory content. We decided not to use any high-level RAG frameworks to learn how to implement the ReAct pattern, tool calling, and core retrieval/synthesis logic from scratch. The main goal is to test the capabilities of search engines like Typesense or OpenSearch for RAG applications, as opposed to traditional vector databases.
+
+We discovered that for structured and especially semi-structured data, search engines are superior because they provide hybrid search including keyword search, which is excellent for finding CVEs and other IDs in semi-structured data as well as text chunks. On top of that, faceting allows aggregation on numeric fields, so a single query provides text fields, chunks, and aggregations simultaneously - this is very powerful.
 
 ## Quick start (use the Makefile)
 
-Always use the project's Makefile for setup, ingest, run and tests. The Makefile centralizes environment, dependencies and Docker orchestration so reviewers can reproduce runs reliably.
+Always use the project's Makefile for setup, ingest, run and tests. The Makefile centralizes environment, dependencies and Docker orchestration so you can reproduce runs reliably.
 
 **IMPORTANT**: You need a Google API key to run this system. Get one free at [Google AI Studio](https://aistudio.google.com/app/apikey).
 
@@ -34,7 +36,7 @@ GOOGLE_API_KEY=your_api_key_here
 
 ## Makefile summary
 
-This table shows the most useful targets you'll use during review.
+This table shows the most useful targets you'll use when working with the system.
 
 | Command | Purpose |
 | --- | --- |
@@ -53,13 +55,15 @@ This table shows the most useful targets you'll use during review.
 
 ## Assumptions
 
-This solution is tailored for a specific use case and data profile:
+This project is tailored for a specific use case and data profile:
 
 **Use case**: Vulnerability search and basic analytics over semi-structured data (CVE metadata + advisory text). The system assumes a search engine is already operational; we're reusing it rather than building from scratch.
 
 **Data shape**: Semi-structured (not fully relational, not purely unstructured). Structured metadata (CVE ID, CVSS, versions) paired with advisory documents that benefit from semantic search.
 
 **Scale & simplicity**: We prioritize avoiding data duplication across different formats and maintaining consistency. Simplicity matters as much as scale—if the system becomes harder to reason about, it's harder to maintain.
+
+**Learning goals**: We implemented everything from scratch without frameworks to deeply understand ReAct patterns, tool calling, and hybrid search mechanics. This hands-on approach revealed the superiority of search engines over pure vector databases for structured/semi-structured data.
 
 **When this approach may not fit:**
 
@@ -115,7 +119,7 @@ For the given dataset (47 CVEs with semi-structured advisories), this hybrid ret
 
 ### Why all-MiniLM-L6-v2 for embeddings?
 
-I chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
+We chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
 
 **Practical reasons:**
 
@@ -130,7 +134,7 @@ With 47 CVEs and 8 advisories, embedding quality matters less than chunking stra
 
 ### Why Typesense? (Design Decision)
 
-I evaluated four major search approaches:
+We evaluated four major search approaches and chose Typesense because it demonstrates the superiority of search engines over pure vector databases for structured and semi-structured data:
 
 | Approach | Structured | Semantic | Hybrid | Complexity |
 | --- | --- | --- | --- | --- |
@@ -139,12 +143,14 @@ I evaluated four major search approaches:
 | **Typesense** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Low |
 | SQLite + FAISS | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | Medium |
 
-**Why Typesense wins:**
+**Why search engines like Typesense are superior for structured/semi-structured data:**
 
-- **Native Hybrid Search**: Single query combines BM25 (keyword) + vector similarity with automatic rank fusion. No manual result merging.
+- **Native Hybrid Search**: Single query combines BM25 (keyword) + vector similarity with automatic rank fusion. Perfect for finding CVEs by ID (keyword) while also understanding advisory content (semantic).
+- **Faceting for Aggregations**: Built-in aggregation capabilities allow computing statistics on numeric fields (CVSS scores, version counts) in the same query that retrieves text content.
 - **One Document, Dual-Indexed**: All data in one Typesense collection with both keyword and vector indexes. No metadata duplication. Vector search includes two embedding levels: (1) 47 CSV embeddings (CVE descriptions) for full-dataset semantic coverage, and (2) ~60-80 nested advisory chunk embeddings for fine-grained search within the 8 CVEs that have detailed advisories.
-- **Simple API**: One function call handles keyword search, vector search, filtering, and aggregations.
-- **Production Pattern**: Mirrors how organizations use Elasticsearch—proven architecture.
+- **Single Query Power**: Unlike vector databases, one search call returns filtered results, semantic matches, aggregations, and facets simultaneously - extremely powerful for semi-structured data.
+
+**Key insight for structured/semi-structured data:** Search engines excel where vector databases struggle. They handle IDs, metadata, and aggregations natively while providing semantic search, making them ideal for datasets like CVEs that have both structured fields (IDs, scores, versions) and unstructured content (advisory text).
 
 #### CVE Document Structure in Typesense
 
@@ -192,7 +198,7 @@ CVE Document (47 total):
   - No distributed indexing: both FAISS and SQLite struggle at scale (terabytes of vectors, millions of CVEs)
 - **PostgreSQL only**: Can't do semantic search. Simple text search.
 
-**Real-world context:** I reviewed public services like [Snyk Security](https://security.snyk.io/) and observed they rely on search engines. This influenced our assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
+**Real-world context:** We researched public services like [Snyk Security](https://security.snyk.io/) and observed they rely on search engines. This influenced our assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
 
 **Additional trade-offs:**
 
@@ -539,7 +545,7 @@ additional_filters="advisory_chunks.{section:=remediation} && advisory_chunks.{s
 
 **Search**: Hybrid (BM25 + vector) across CVE metadata + nested advisory chunks
 
-## Where to start reviewing
+## Getting Started
 
 1. **Run it first:**
 
@@ -563,12 +569,12 @@ additional_filters="advisory_chunks.{section:=remediation} && advisory_chunks.{s
    - `src/search_tool.py` — unified search implementation
    - `src/ingest.py` — how data gets into Typesense
 
-4. **Review the code:**
+4. **Explore the code:**
 
    - Start with `src/agent.py` for the orchestration pattern, this is mainly boiler plate code, not the main focus
    - Check `src/search_tool.py` for the unified search interface
    - See `src/ingest.py` for CVE-centric document merging and embedding generation
-   - The rest of the files are utitility classes that can be ignored.
+   - The rest of the files are utility classes that can be ignored.
 
 5. **Verify the changes:**
 
@@ -581,7 +587,7 @@ additional_filters="advisory_chunks.{section:=remediation} && advisory_chunks.{s
 
 ## Production Considerations
 
-This is a code challenge demonstration. For production, these enhancements are essential:
+This project was built from scratch to learn ReAct patterns, tool calling, and hybrid search mechanics. For production deployment, these enhancements would be essential:
 
 ### High-level Framework
 
@@ -631,4 +637,4 @@ These were evaluated but skipped due to small dataset (47 CVEs):
 
 ### Why These Aren't All Included
 
-Production features require 5-10x more code and infrastructure complexity. For a code challenge, focus is on demonstrating RAG architecture (search_tool.py, prompts.py) rather than production scaffolding.
+Production features require 5-10x more code and infrastructure complexity. Our focus was on learning RAG architecture from scratch and demonstrating the power of search engines for structured/semi-structured data rather than production scaffolding.

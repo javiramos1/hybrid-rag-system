@@ -62,8 +62,8 @@ class Config:
     """Maximum score gap between consecutive documents. Documents with larger gaps removed as noise. Override with MAX_GAP env var."""
 
     # ========== Data Ingestion ==========
-    task_dir: Path = None  # type: ignore
-    """Path to task data directory (advisories, CSVs). Override with INGESTION_TASK_DIR env var."""
+    data_dir: Path = None  # type: ignore
+    """Path to data directory (advisories, CSVs). Override with INGESTION_DATA_DIR env var."""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -115,7 +115,7 @@ class Config:
             raise ValueError(f"Invalid float env var for MIN_SCORE or MAX_GAP: {e}")
 
         # Optional: Data ingestion path (with default)
-        task_dir = Path(os.getenv("INGESTION_TASK_DIR", "../task"))
+        data_dir = Path(os.getenv("INGESTION_DATA_DIR", "../data"))
 
         return cls(
             google_api_key=google_api_key,
@@ -130,7 +130,7 @@ class Config:
             embedding_model=embedding_model,
             min_score=min_score,
             max_gap=max_gap,
-            task_dir=task_dir,
+            data_dir=data_dir,
         )
 
     def __repr__(self) -> str:
@@ -141,5 +141,5 @@ class Config:
             f"max_react_iterations={self.max_react_iterations}, "
             f"min_score={self.min_score}, max_gap={self.max_gap}, "
             f"vector_search_k={self.vector_search_k}, "
-            f"task_dir={self.task_dir})"
+            f"data_dir={self.data_dir})"
         )

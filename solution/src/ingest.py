@@ -41,7 +41,7 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
-def load_csv_data(task_dir: Path) -> pl.DataFrame:
+def load_csv_data(data_dir: Path) -> pl.DataFrame:
     """Load and denormalize CSV data using SQL-like joins.
     
     Uses Polars for faster CSV loading and joins compared to pandas.
@@ -56,10 +56,10 @@ def load_csv_data(task_dir: Path) -> pl.DataFrame:
     """
     logger.info("Loading CSV files...")
 
-    vulnerabilities = pl.read_csv(task_dir / "vulnerabilities.csv")
-    packages = pl.read_csv(task_dir / "packages.csv")
-    vulnerability_types = pl.read_csv(task_dir / "vulnerability_types.csv")
-    severity_levels = pl.read_csv(task_dir / "severity_levels.csv")
+    vulnerabilities = pl.read_csv(data_dir / "vulnerabilities.csv")
+    packages = pl.read_csv(data_dir / "packages.csv")
+    vulnerability_types = pl.read_csv(data_dir / "vulnerability_types.csv")
+    severity_levels = pl.read_csv(data_dir / "severity_levels.csv")
 
     logger.info("Denormalizing data with joins...")
     full_data = (
@@ -98,7 +98,7 @@ def load_csv_data(task_dir: Path) -> pl.DataFrame:
     return full_data
 
 
-def parse_advisories(task_dir: Path) -> list[dict]:
+def parse_advisories(data_dir: Path) -> list[dict]:
     """Parse advisory markdown files with section-aware chunking strategy.
 
     For each advisory (8 total):
@@ -114,7 +114,7 @@ def parse_advisories(task_dir: Path) -> list[dict]:
     Sections with code blocks are marked with is_code=true for filtering.
     Affected versions data is attached to all chunks from the same CVE for filtering/aggregations.
     """
-    advisories_dir = task_dir / "advisories"
+    advisories_dir = data_dir / "advisories"
     all_chunks = []
 
     for filepath in sorted(advisories_dir.glob("*.md")):
@@ -559,10 +559,10 @@ def main() -> None:
     embedding_model = SentenceTransformer(config.embedding_model)
 
     # Load and denormalize CSV data
-    csv_data = load_csv_data(config.task_dir)
+    csv_data = load_csv_data(config.data_dir)
 
     # Parse advisories with section-based chunking (NEW STRATEGY)
-    advisory_chunks = parse_advisories(config.task_dir)
+    advisory_chunks = parse_advisories(config.data_dir)
 
     # Generate embeddings for all texts
     logger.info("Preparing texts for embedding generation...")
