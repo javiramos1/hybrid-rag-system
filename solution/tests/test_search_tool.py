@@ -13,6 +13,7 @@ load_dotenv()
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# ruff: noqa: E402
 from config import Config
 from search_tool import VulnerabilitySearchTool, SearchResult
 
@@ -646,7 +647,6 @@ class TestAggregationsAndStatistics:
 
         # Verify expected severity levels
         severity_values = [item["value"] for item in counts]
-        expected_levels = {"Critical", "High", "Medium", "Low"}
         found_levels = set(severity_values)
         assert len(found_levels) > 0, "Should find at least one severity level"
 
@@ -812,7 +812,9 @@ class TestAdvancedFilters:
         )
 
         # Should find CVEs with best practices sections
-        assert result.total_found >= 0, "Should return results (may be 0 if no best_practices sections)"
+        assert (
+            result.total_found >= 0
+        ), "Should return results (may be 0 if no best_practices sections)"
 
     def test_filter_advisory_details_section(self, search_tool):
         """Test filtering for CVEs with detailed technical information."""

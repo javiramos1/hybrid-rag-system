@@ -5,8 +5,8 @@ Reviewer: This file defines the system instructions and tool declaration for the
 
 These are functions that just return the tool definition and the system prompt used by the agent. There is no logic here.
 
-NOTE: Prompt engineering is critical for LLM-based agents. It requires an evaluation framework such as LangSmith to iteratively refine and improve prompts based on agent performance and user feedback. 
-Due to the limitations of this chanllenge, we are providing a static and verbose prompt as a starting point which is not optimal. 
+NOTE: Prompt engineering is critical for LLM-based agents. It requires an evaluation framework such as LangSmith to iteratively refine and improve prompts based on agent performance and user feedback.
+Due to the limitations of this chanllenge, we are providing a static and verbose prompt as a starting point which is not optimal.
 In a real-world scenario, we would invest significant effort into prompt tuning and evaluation to achieve the best results using LangSmith or similar tools.
 Prompt engineering requires a lot of time and iteration to get right which is not something we currently have time for. Please, take this into consideration when reviewing the solution.
 
@@ -48,7 +48,7 @@ Supports three search types: keyword (metadata filtering/aggregations), semantic
                 "cve_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Filter by specific CVE IDs (e.g., [\"CVE-2024-1234\"]).",
+                    "description": 'Filter by specific CVE IDs (e.g., ["CVE-2024-1234"]).',
                 },
                 "ecosystems": {
                     "type": "array",
@@ -122,7 +122,7 @@ Use with per_page=0 for aggregations only. See system instructions for complete 
                 },
                 "sort_by": {
                     "type": "string",
-                    "description": "Sort order (e.g., \"cvss_score:desc\", \"_text_match:desc\").",
+                    "description": 'Sort order (e.g., "cvss_score:desc", "_text_match:desc").',
                 },
                 "hybrid_search_alpha": {
                     "type": "number",
@@ -142,7 +142,7 @@ IMPORTANT: Adjust alpha based on query intent:
 
 def get_system_instruction(chat_history: list = None) -> str:
     """Return system instruction for query routing and answer formatting with ReAct pattern.
-    
+
     Args:
         chat_history: Optional list of ChatMessage objects containing previous Q&A exchanges
     """
@@ -155,7 +155,7 @@ def get_system_instruction(chat_history: list = None) -> str:
             chat_history_section += f"User: {msg.user_question}\n"
             chat_history_section += f"Assistant: {msg.final_answer[:1000]}{'...' if len(msg.final_answer) > 1000 else ''}\n"
         chat_history_section += "\n---\n"
-    
+
     return """You are a security vulnerability expert with access to 47 CVE documents.
 
 === SCOPE & GUARDRAILS ===
@@ -575,7 +575,7 @@ def get_react_iteration_prompt(
     """Build a ReAct-format prompt following the official ReAct pattern.
 
     Uses the standard ReAct format: Thought → Action → Observation → Final Answer
-    
+
     Args:
         user_question: Original user question
         iteration: Current iteration number (1-indexed)
@@ -595,7 +595,7 @@ def get_react_iteration_prompt(
         collected_aggregations_data = {}
     if search_parameters is None:
         search_parameters = []
-    
+
     # Calculate counts from actual data
     documents_collected = len(collected_documents_data)
     aggregations_collected = len(collected_aggregations_data)
@@ -605,16 +605,16 @@ def get_react_iteration_prompt(
         # First, add an explicit DO NOT search list to prevent LLM from suggesting duplicates
         scratchpad += f"\n{'='*80}\n🚫 SEARCHES ALREADY PERFORMED - DO NOT REPEAT:\n"
         for i, params in enumerate(search_parameters, 1):
-            search_type = params.get('search_type', 'hybrid')
-            query = params.get('query', '*')
-            filters = params.get('filters', '')
-            cve_ids = params.get('cve_ids', [])
-            ecosystems = params.get('ecosystems', [])
-            severity_levels = params.get('severity_levels', [])
-            vulnerability_types = params.get('vulnerability_types', [])
-            has_fix = params.get('has_fix')
-            published_date_after = params.get('published_date_after')
-            
+            search_type = params.get("search_type", "hybrid")
+            query = params.get("query", "*")
+            filters = params.get("filters", "")
+            cve_ids = params.get("cve_ids", [])
+            ecosystems = params.get("ecosystems", [])
+            severity_levels = params.get("severity_levels", [])
+            vulnerability_types = params.get("vulnerability_types", [])
+            has_fix = params.get("has_fix")
+            published_date_after = params.get("published_date_after")
+
             scratchpad += f"\n❌ Search {i} ALREADY DONE - DO NOT REPEAT:\n"
             scratchpad += f"  search_type='{search_type}', query='{query}'\n"
             if filters:
@@ -631,35 +631,37 @@ def get_react_iteration_prompt(
                 scratchpad += f"  has_fix={has_fix}\n"
             if published_date_after:
                 scratchpad += f"  published_date_after='{published_date_after}'\n"
-        
+
         # Then show what was found
         scratchpad += f"\n{'='*80}\nSearch History ({len(previous_searches)} attempts):\n"
         for i, (search_type, query, results_count) in enumerate(previous_searches, 1):
             scratchpad += f"Observation {i}: Searched with {search_type} (query: '{query}') → Found {results_count} results\n"
-        
+
         # Add clear guidance
-        scratchpad += f"\n⚠️ DEDUPLICATION REMINDER:\n"
-        scratchpad += f"The '🚫 DO NOT REPEAT' list above shows exact search combinations that were already executed.\n"
-        scratchpad += f"If you propose ANY of these exact combinations, it WILL be skipped (wasting your iteration).\n"
-        scratchpad += f"INSTEAD: Propose a DIFFERENT search with changed: search_type, query, or filters.\n"
-    
+        scratchpad += "\n⚠️ DEDUPLICATION REMINDER:\n"
+        scratchpad += "The '🚫 DO NOT REPEAT' list above shows exact search combinations that were already executed.\n"
+        scratchpad += "If you propose ANY of these exact combinations, it WILL be skipped (wasting your iteration).\n"
+        scratchpad += (
+            "INSTEAD: Propose a DIFFERENT search with changed: search_type, query, or filters.\n"
+        )
+
     # Add collected data summary
     scratchpad += f"\n{'='*80}\nData Collected So Far:\n"
     scratchpad += f"  - Unique CVE Documents: {documents_collected}\n"
     scratchpad += f"  - Aggregation Fields: {aggregations_collected}\n"
-    
+
     # Add STRONG stopping recommendation if data is present
     if documents_collected > 0 or aggregations_collected > 0:
-        scratchpad += f"\n🚨 YOU HAVE DATA - STRONG RECOMMENDATION TO ANSWER:\n"
+        scratchpad += "\n🚨 YOU HAVE DATA - STRONG RECOMMENDATION TO ANSWER:\n"
         if documents_collected > 0:
             scratchpad += f"  ✅ You have {documents_collected} CVE document(s) - SUFFICIENT for most queries\n"
-            scratchpad += f"  ✅ Default action: Provide 'Final Answer:' using these documents\n"
-            scratchpad += f"  ⚠️ Only search again if documents are COMPLETELY irrelevant or wrong\n"
+            scratchpad += "  ✅ Default action: Provide 'Final Answer:' using these documents\n"
+            scratchpad += "  ⚠️ Only search again if documents are COMPLETELY irrelevant or wrong\n"
         if aggregations_collected > 0:
             scratchpad += f"  ✅ You have {aggregations_collected} aggregation field(s) - SUFFICIENT for statistical queries\n"
-            scratchpad += f"  ✅ Default action: Provide 'Final Answer:' using these statistics\n"
-        scratchpad += f"\n"
-    
+            scratchpad += "  ✅ Default action: Provide 'Final Answer:' using these statistics\n"
+        scratchpad += "\n"
+
     # Add actual aggregation results
     if collected_aggregations_data:
         scratchpad += f"\n{'='*80}\nAggregation Results:\n"
@@ -676,27 +678,28 @@ def get_react_iteration_prompt(
                     scratchpad += f"  {field} Counts:\n"
                     for count_item in agg_data["counts"][:20]:  # Top 20
                         scratchpad += f"    - {count_item.get('value', 'N/A')}: {count_item.get('count', 0)} vulnerabilities\n"
-    
-    
+
     # Add actual document details
     if collected_documents_data:
         scratchpad += f"\n{'='*80}\nCollected CVE Documents ({documents_collected} total):\n"
-        scratchpad += f"⭐ IMPORTANT: Documents are sorted by RELEVANCE SCORE (highest first).\n"
-        scratchpad += f"   - Score range: 0.0-1.0 (higher = more relevant to the query)\n"
-        scratchpad += f"   - PRIORITIZE information from documents with HIGH SCORES (0.7+)\n"
-        scratchpad += f"   - Use lower-scoring documents (0.3-0.7) only for context/confirmation\n"
-        scratchpad += f"   - Ignore or minimize documents with LOW SCORES (<0.3) unless essential\n"
-        
-        for idx, (cve_id, doc) in enumerate(list(collected_documents_data.items())[:20], 1):  # Limit to 20 for token efficiency
+        scratchpad += "⭐ IMPORTANT: Documents are sorted by RELEVANCE SCORE (highest first).\n"
+        scratchpad += "   - Score range: 0.0-1.0 (higher = more relevant to the query)\n"
+        scratchpad += "   - PRIORITIZE information from documents with HIGH SCORES (0.7+)\n"
+        scratchpad += "   - Use lower-scoring documents (0.3-0.7) only for context/confirmation\n"
+        scratchpad += "   - Ignore or minimize documents with LOW SCORES (<0.3) unless essential\n"
+
+        for idx, (cve_id, doc) in enumerate(
+            list(collected_documents_data.items())[:20], 1
+        ):  # Limit to 20 for token efficiency
             # Get scores for display
-            text_match = doc.get('_text_match', 1.0)
-            vector_dist = doc.get('_vector_distance')
-            
+            text_match = doc.get("_text_match", 1.0)
+            vector_dist = doc.get("_vector_distance")
+
             # Format score display
             score_display = f"{text_match:.4f}"
             if vector_dist is not None:
                 score_display += f" (semantic: {vector_dist:.4f})"
-            
+
             scratchpad += f"\n{idx}. CVE: {cve_id} [SCORE: {score_display}] ⭐\n"
             scratchpad += f"   Package: {doc.get('package_name', 'N/A')}\n"
             scratchpad += f"   Ecosystem: {doc.get('ecosystem', 'N/A')}\n"
@@ -706,18 +709,20 @@ def get_react_iteration_prompt(
             scratchpad += f"   Published Date: {doc.get('published_date', 'N/A')}\n"
             scratchpad += f"   Fixed Version: {doc.get('fixed_version', 'N/A')}\n"
             scratchpad += f"   Affected Versions: {doc.get('affected_versions', 'N/A')}\n"
-            
+
             if doc.get("description"):
-                desc = doc['description']
+                desc = doc["description"]
                 scratchpad += f"   Description: {desc[:1000] if len(desc) > 1000 else desc}\n"
 
             if doc.get("advisory_text"):
-                advisory = doc['advisory_text']
-                scratchpad += f"   Advisory: {advisory[:2000] if len(advisory) > 2000 else advisory}\n"
-        
+                advisory = doc["advisory_text"]
+                scratchpad += (
+                    f"   Advisory: {advisory[:2000] if len(advisory) > 2000 else advisory}\n"
+                )
+
         if documents_collected > 20:
             scratchpad += f"\n... and {documents_collected - 20} more documents\n"
-    
+
     # Build the iteration prompt (ReAct pattern already defined in system prompt, no need to repeat)
     prompt = f"""Question: {user_question}
 
@@ -734,8 +739,8 @@ You have collected:
 DECISION LOGIC:
 
 {f"✅ **YOU HAVE {documents_collected} DOCUMENTS** - This is SUFFICIENT to answer most questions. PROVIDE FINAL ANSWER NOW unless:" if documents_collected > 0 else "❌ **NO DOCUMENTS YET**"}
-{f"   • The documents are completely irrelevant to the user's question (wrong CVE, wrong topic)" if documents_collected > 0 else ""}
-{f"   • You need ONE more specific search to get the exact information requested" if documents_collected > 0 else ""}
+{"   • The documents are completely irrelevant to the user's question (wrong CVE, wrong topic)" if documents_collected > 0 else ""}
+{"   • You need ONE more specific search to get the exact information requested" if documents_collected > 0 else ""}
 {f"\n✅ **YOU HAVE {aggregations_collected} AGGREGATION FIELDS** - This is SUFFICIENT for statistical/counting queries. PROVIDE FINAL ANSWER NOW." if aggregations_collected > 0 else ""}
 
 {"🛑 **DEFAULT ACTION: PROVIDE FINAL ANSWER**" if (documents_collected > 0 or aggregations_collected > 0) else "⚠️ **NEED TO SEARCH** - No data collected yet"}
@@ -750,7 +755,7 @@ MANDATORY RULES:
 ⚠️ SEARCH COUNT WARNING: You have done {len(previous_searches)} search(es).
 {f"↳ You have {2 - len(previous_searches)} search(es) remaining before you MUST answer" if len(previous_searches) < 2 else "↳ You have EXHAUSTED your search budget. PROVIDE FINAL ANSWER NOW."}
 {f"\n↳ ⚠️ STRONGLY CONSIDER answering now with the {documents_collected} documents you have" if len(previous_searches) == 1 and documents_collected > 0 else ""}
-{f"\n↳ ⚠️ STRONGLY CONSIDER answering now with the aggregations you have" if len(previous_searches) == 1 and aggregations_collected > 0 else ""}
+{"\n↳ ⚠️ STRONGLY CONSIDER answering now with the aggregations you have" if len(previous_searches) == 1 and aggregations_collected > 0 else ""}
 
 DECISION CRITERIA (CHECK IN ORDER):
 1. ✅ Have {documents_collected} documents AND {len(previous_searches)} >= 1 search? → **ANSWER NOW** (most likely sufficient)

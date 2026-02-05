@@ -14,9 +14,9 @@ load_dotenv()
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# ruff: noqa: E402
 from agent import VulnerabilityAgent, ChatMessage, IterationState
 from config import Config
-from search_tool import SearchResult
 from prompts import get_search_tool_declaration, get_system_instruction
 
 
@@ -143,15 +143,11 @@ class TestReActPattern:
 
         response = Mock()
         response.text = "Let me analyze this. Final Answer: The vulnerability has CVSS 9.8"
-        
-        state = IterationState(
-            iteration=1,
-            search_history=[],
-            documents_collected={}
-        )
-        
+
+        state = IterationState(iteration=1, search_history=[], documents_collected={})
+
         result = agent._process_response(response, state)
-        
+
         assert result is True
         assert "CVSS 9.8" in state.final_answer
         assert "Let me analyze" not in state.final_answer
@@ -162,15 +158,11 @@ class TestReActPattern:
 
         response = Mock()
         response.text = "Let me search for more information about this vulnerability."
-        
-        state = IterationState(
-            iteration=1,
-            search_history=[],
-            documents_collected={}
-        )
-        
+
+        state = IterationState(iteration=1, search_history=[], documents_collected={})
+
         result = agent._process_response(response, state)
-        
+
         assert result is False
         assert state.final_answer is None
 
@@ -244,7 +236,7 @@ class TestChatHistory:
         """Test ChatMessage dataclass."""
         msg = ChatMessage(
             user_question="What are critical vulnerabilities?",
-            final_answer="Critical vulnerabilities include CVE-2024-1234..."
+            final_answer="Critical vulnerabilities include CVE-2024-1234...",
         )
         assert msg.user_question == "What are critical vulnerabilities?"
         assert msg.final_answer == "Critical vulnerabilities include CVE-2024-1234..."
@@ -266,7 +258,7 @@ class TestChatHistory:
         chat_history = [
             ChatMessage(
                 user_question="List critical npm vulnerabilities",
-                final_answer="Critical npm vulnerabilities include express-validator CVE-2024-1234..."
+                final_answer="Critical npm vulnerabilities include express-validator CVE-2024-1234...",
             )
         ]
         instruction = get_system_instruction(chat_history=chat_history)
@@ -280,16 +272,16 @@ class TestChatHistory:
         chat_history = [
             ChatMessage(
                 user_question="What are critical npm vulnerabilities?",
-                final_answer="Critical npm vulns include..."
+                final_answer="Critical npm vulns include...",
             ),
             ChatMessage(
                 user_question="How do I fix CVE-2024-1234?",
-                final_answer="To fix this vulnerability, upgrade to the patched version..."
+                final_answer="To fix this vulnerability, upgrade to the patched version...",
             ),
             ChatMessage(
                 user_question="Show XSS examples",
-                final_answer="XSS examples demonstrate cross-site scripting..."
-            )
+                final_answer="XSS examples demonstrate cross-site scripting...",
+            ),
         ]
         instruction = get_system_instruction(chat_history=chat_history)
         assert "PREVIOUS CONVERSATION HISTORY" in instruction
@@ -303,12 +295,7 @@ class TestChatHistory:
     def test_system_instruction_truncates_long_answers(self):
         """Test system instruction truncates long final answers."""
         long_answer = "A" * 2000  # 2000 character answer
-        chat_history = [
-            ChatMessage(
-                user_question="Test question",
-                final_answer=long_answer
-            )
-        ]
+        chat_history = [ChatMessage(user_question="Test question", final_answer=long_answer)]
         instruction = get_system_instruction(chat_history=chat_history)
         # Should contain the truncated version, not the full answer
         assert "Exchange 1:" in instruction
@@ -318,15 +305,12 @@ class TestChatHistory:
     def test_chat_history_maintains_order(self, config):
         """Test chat history maintains insertion order."""
         agent = VulnerabilityAgent(config)
-        
+
         # Simulate adding messages
         for i in range(1, 4):
-            msg = ChatMessage(
-                user_question=f"Question {i}",
-                final_answer=f"Answer {i}"
-            )
+            msg = ChatMessage(user_question=f"Question {i}", final_answer=f"Answer {i}")
             agent.chat_history.append(msg)
-        
+
         assert len(agent.chat_history) == 3
         assert agent.chat_history[0].user_question == "Question 1"
         assert agent.chat_history[1].user_question == "Question 2"
@@ -348,18 +332,17 @@ class TestChatHistory:
             embedding_model=config.embedding_model,
         )
         agent = VulnerabilityAgent(modified_config)
-        
+
         # Add 4 messages
         for i in range(1, 5):
-            agent.chat_history.append(ChatMessage(
-                user_question=f"Question {i}",
-                final_answer=f"Answer {i}"
-            ))
-            
+            agent.chat_history.append(
+                ChatMessage(user_question=f"Question {i}", final_answer=f"Answer {i}")
+            )
+
             # Simulate the truncation logic from answer_question()
             if len(agent.chat_history) > agent.config.max_chat_history:
-                agent.chat_history = agent.chat_history[-agent.config.max_chat_history:]
-        
+                agent.chat_history = agent.chat_history[-agent.config.max_chat_history :]
+
         # Should only have last 2 messages
         assert len(agent.chat_history) == 2
         assert agent.chat_history[0].user_question == "Question 3"
@@ -381,7 +364,7 @@ class TestChatHistory:
             embedding_model=config.embedding_model,
         )
         agent = VulnerabilityAgent(modified_config)
-        
+
         # Add 5 messages
         messages = [
             ("What are npm vulns?", "npm vulns..."),
@@ -390,16 +373,13 @@ class TestChatHistory:
             ("List High severity?", "High severity includes..."),
             ("Explain SQL injection?", "SQL injection is..."),
         ]
-        
+
         for question, answer in messages:
-            agent.chat_history.append(ChatMessage(
-                user_question=question,
-                final_answer=answer
-            ))
-            
+            agent.chat_history.append(ChatMessage(user_question=question, final_answer=answer))
+
             if len(agent.chat_history) > agent.config.max_chat_history:
-                agent.chat_history = agent.chat_history[-agent.config.max_chat_history:]
-        
+                agent.chat_history = agent.chat_history[-agent.config.max_chat_history :]
+
         # Should only have last 3 messages: messages[2], messages[3], messages[4]
         assert len(agent.chat_history) == 3
         assert agent.chat_history[0].user_question == "Show XSS?"
@@ -409,22 +389,16 @@ class TestChatHistory:
     def test_system_instruction_formats_exchanges_correctly(self):
         """Test system instruction formats chat exchanges with correct structure."""
         chat_history = [
-            ChatMessage(
-                user_question="Question 1",
-                final_answer="Answer 1"
-            ),
-            ChatMessage(
-                user_question="Question 2",
-                final_answer="Answer 2"
-            )
+            ChatMessage(user_question="Question 1", final_answer="Answer 1"),
+            ChatMessage(user_question="Question 2", final_answer="Answer 2"),
         ]
         instruction = get_system_instruction(chat_history=chat_history)
-        
+
         # Check structure
         assert "Exchange 1:" in instruction
         assert "User: Question 1" in instruction
         assert "Assistant: Answer 1" in instruction
-        
+
         assert "Exchange 2:" in instruction
         assert "User: Question 2" in instruction
         assert "Assistant: Answer 2" in instruction
@@ -434,11 +408,11 @@ class TestChatHistory:
         chat_history = [
             ChatMessage(
                 user_question="What about CVE-2024-1234 & XSS?",
-                final_answer="It affects npm packages like express-validator. See code: var x = '<script>';"
+                final_answer="It affects npm packages like express-validator. See code: var x = '<script>';",
             )
         ]
         instruction = get_system_instruction(chat_history=chat_history)
-        
+
         # Should preserve special characters
         assert "CVE-2024-1234" in instruction
         assert "express-validator" in instruction
@@ -449,11 +423,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_documented_basic(self, agent):
         """Test heuristic detects 'documented' keyword."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         # Should trigger heuristic 1
         agent.search_heuristics("Show me well-documented vulnerabilities", state)
@@ -464,11 +434,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_advisory_keyword(self, agent):
         """Test heuristic detects 'advisory' keyword."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         agent.search_heuristics("List CVEs with advisory documentation", state)
 
@@ -477,11 +443,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_remediation_refinement(self, agent):
         """Test heuristic adds remediation section filter when mentioned."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         agent.search_heuristics("Show documented vulnerabilities with remediation steps", state)
 
@@ -492,11 +454,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_testing_refinement(self, agent):
         """Test heuristic adds testing section filter when mentioned."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         agent.search_heuristics("Show documented vulnerabilities with testing documentation", state)
 
@@ -505,11 +463,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_best_practices_refinement(self, agent):
         """Test heuristic adds best practices section filter when mentioned."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         agent.search_heuristics("Show comprehensive vulnerabilities with best practices", state)
 
@@ -518,11 +472,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_details_refinement(self, agent):
         """Test heuristic adds details section filter when mentioned."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         agent.search_heuristics("Show detailed information about documented vulnerabilities", state)
 
@@ -531,11 +481,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_no_trigger(self, agent):
         """Test heuristic doesn't trigger for non-matching queries."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         # Query without documented/advisory keywords
         agent.search_heuristics("Show all npm vulnerabilities", state)
@@ -546,11 +492,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_collects_aggregations(self, agent):
         """Test heuristic collects aggregation data."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         agent.search_heuristics("Show well-documented vulnerabilities", state)
 
@@ -561,11 +503,7 @@ class TestSearchHeuristics:
 
     def test_heuristic_multiple_keywords(self, agent):
         """Test heuristic handles queries with multiple matching keywords."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         # Query with both 'documented' and 'detailed'
         agent.search_heuristics("Show documented and detailed vulnerabilities", state)
@@ -575,15 +513,10 @@ class TestSearchHeuristics:
 
     def test_heuristic_case_insensitive(self, agent):
         """Test heuristic detection is case-insensitive."""
-        state = IterationState(
-            iteration=0,
-            search_history=[],
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         # Mixed case keywords
         agent.search_heuristics("Show DOCUMENTED vulnerabilities with REMEDIATION", state)
 
         # Should still trigger heuristic
         assert len(state.search_history) > 0
-

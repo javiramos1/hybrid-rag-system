@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 @dataclass
 class SearchResult:
     """Structured response from search operations.
-    
+
     Output fields:
     - query_type: What kind of search was run (keyword, semantic, or hybrid)
     - total_found: Total documents matching the query (before pagination)
@@ -82,7 +82,7 @@ class VulnerabilitySearchTool:
             config: Config instance with Typesense and embedding settings
         """
         self.config = config
-        
+
         # Connect to Typesense server; handles both keyword and vector queries
         # In Production we would add timeouts, retries, and error handling
         self.client = typesense.Client(
@@ -98,7 +98,7 @@ class VulnerabilitySearchTool:
                 "connection_timeout_seconds": 10,
             }
         )
-        
+
         # Load embedding model for semantic search; encodes queries into vectors
         self.embedding_model = SentenceTransformer(config.embedding_model)
 
@@ -106,9 +106,13 @@ class VulnerabilitySearchTool:
         # This avoids ~100-200ms latency on first search when lazy-loading
         try:
             self._vulnerability_type_mapping = self._load_vulnerability_type_mapping()
-            logger.info(f"Loaded {len(self._vulnerability_type_mapping)} vulnerability type mappings")
+            logger.info(
+                f"Loaded {len(self._vulnerability_type_mapping)} vulnerability type mappings"
+            )
         except Exception as e:
-            logger.warning(f"Failed to pre-load vulnerability type mappings: {e}. Will lazy-load on first use.")
+            logger.warning(
+                f"Failed to pre-load vulnerability type mappings: {e}. Will lazy-load on first use."
+            )
             self._vulnerability_type_mapping = None
 
         logger.info(f"Initialized search tool with model: {config.embedding_model}")
@@ -118,21 +122,21 @@ class VulnerabilitySearchTool:
         """Load vulnerability type mapping from Typesense.
 
         Maps common abbreviations (RCE, XSS, etc.) to their full names from the database.
-        
+
         Why we need this:
-        - CSV files and advisories use inconsistent naming: some have abbreviations (RCE) 
+        - CSV files and advisories use inconsistent naming: some have abbreviations (RCE)
           while others use full names (Remote Code Execution)
         - Users might ask "show RCE vulnerabilities" but the database has "Remote Code Execution"
         - We query Typesense to learn what names are actually stored, then create mappings
         - This ensures filters work regardless of whether the user says RCE or Remote Code Execution
         - The search engine doesn't understand semantic equivalence, so we provide explicit mappings
-        
+
         Production alternatives (not implemented here):
         - Connect the agent to a glossary/taxonomy service: agent learns abbreviations upfront,
           then queries the search engine with normalized names
         - Improve ingestion pipeline: add synonym fields to documents at index time, so Typesense
           natively handles both "RCE" and "Remote Code Execution" in searches
-        
+
         Both approaches solve this more elegantly, but for now this simple mapping is sufficient.
         Only creates mappings for abbreviations not already in the database.
         """
@@ -183,7 +187,7 @@ class VulnerabilitySearchTool:
 
     def _get_vulnerability_type_mapping(self) -> Dict[str, str]:
         """Get cached vulnerability type mapping (or empty dict if failed to load).
-        
+
         Returns the pre-loaded mapping from initialization.
         If initialization failed, returns empty dict (filters will use exact matching).
         """
@@ -299,9 +303,9 @@ class VulnerabilitySearchTool:
             logger.debug(f"Filters: {filters}")
 
         # Request aggregations (counts per category, stats on numeric fields)
-        # Faceting tells Typesense: "for each unique value in this field, count how many 
+        # Faceting tells Typesense: "for each unique value in this field, count how many
         # documents have it" (for strings) or "compute min/max/avg" (for numbers).
-        # Example: facet_by="ecosystem,severity" returns {ecosystem: {npm: 10, pip: 8, maven: 5}, 
+        # Example: facet_by="ecosystem,severity" returns {ecosystem: {npm: 10, pip: 8, maven: 5},
         # severity: {Critical: 8, High: 10, Low: 5}}. Used by agent to summarize results
         # ("Most are Critical") or suggest follow-up filters.
         if facet_by:
@@ -353,10 +357,14 @@ class VulnerabilitySearchTool:
                     # Preserve scores from hit metadata
                     if "text_match" in hit:
                         doc["_text_match"] = hit["text_match"]
-                        logger.debug(f"Added _text_match={hit['text_match']} to {doc.get('cve_id')}")
+                        logger.debug(
+                            f"Added _text_match={hit['text_match']} to {doc.get('cve_id')}"
+                        )
                     if "vector_distance" in hit:
                         doc["_vector_distance"] = hit["vector_distance"]
-                        logger.debug(f"Added _vector_distance={hit['vector_distance']} to {doc.get('cve_id')}")
+                        logger.debug(
+                            f"Added _vector_distance={hit['vector_distance']} to {doc.get('cve_id')}"
+                        )
                     documents.append(doc)
         else:
             hits = response.get("hits", [])
@@ -369,9 +377,11 @@ class VulnerabilitySearchTool:
                     logger.debug(f"Added _text_match={hit['text_match']} to {doc.get('cve_id')}")
                 if "vector_distance" in hit:
                     doc["_vector_distance"] = hit["vector_distance"]
-                    logger.debug(f"Added _vector_distance={hit['vector_distance']} to {doc.get('cve_id')}")
+                    logger.debug(
+                        f"Added _vector_distance={hit['vector_distance']} to {doc.get('cve_id')}"
+                    )
                 documents.append(doc)
-        
+
         # Normalize text_match scores (BM25) to 0-1 range using min-max normalization
         documents = self._normalize_text_match_scores(documents)
 
@@ -407,20 +417,20 @@ class VulnerabilitySearchTool:
         query_embedding: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """Build Typesense search parameters based on search type.
-        
+
         Constructs the low-level Typesense query dict. Three search strategies:
-        
+
         1. Keyword (BM25): Full-text search using BM25 ranking algorithm
            - Matches exact/partial keywords in CVE ID, package name, severity, etc.
            - Best for: "List all Critical npm vulnerabilities", "Find CVE-2024-1234"
            - Fast, precise for structured filters + text queries
-           
+
         2. Semantic (Vector): Embedding-based similarity search
            - Encodes user query as vector, finds nearest embeddings in database
            - Best for: "Explain SQL injection", "Show code examples for XSS"
            - Captures intent/concepts even if keywords don't match exactly
            - Uses pre-computed embedding if provided (avoids re-encoding)
-           
+
         3. Hybrid: Combines BM25 + vector with rank fusion
            - Runs both searches, Typesense merges results using configurable alpha weight
            - Best for: "Show npm vulnerabilities with high CVSS + explain the risk"
@@ -442,7 +452,11 @@ class VulnerabilitySearchTool:
         elif search_type == "semantic":
             # Vector similarity search using query encoding
             # Use pre-computed embedding if provided (performance optimization), otherwise encode now
-            embedding = query_embedding if query_embedding is not None else self.embedding_model.encode(query).tolist()
+            embedding = (
+                query_embedding
+                if query_embedding is not None
+                else self.embedding_model.encode(query).tolist()
+            )
             params["q"] = "*"
             params["vector_query"] = (
                 f"embedding:([{','.join(str(v) for v in embedding)}], k:{self.config.vector_search_k})"
@@ -452,7 +466,11 @@ class VulnerabilitySearchTool:
         else:  # hybrid
             # Combine BM25 and vector search with rank fusion (alpha configurable)
             # Use pre-computed embedding if provided (performance optimization), otherwise encode now
-            embedding = query_embedding if query_embedding is not None else self.embedding_model.encode(query).tolist()
+            embedding = (
+                query_embedding
+                if query_embedding is not None
+                else self.embedding_model.encode(query).tolist()
+            )
             params["q"] = query
             params["query_by"] = (
                 "cve_id,package_name,vulnerability_type,severity,content,affected_versions,fixed_version,"
@@ -485,11 +503,11 @@ class VulnerabilitySearchTool:
 
         Applies optional filters for CVE IDs, ecosystems, severity levels,
         vulnerability types, CVSS score thresholds, affected versions, and date ranges.
-        
+
         New filters:
         - has_fix: True filters to CVEs with available fixes, False for CVEs without fixes
         - published_date_after: Filter to vulnerabilities published on or after this date (YYYY-MM-DD format)
-        
+
         Affected versions filtering:
         - affected_version_status: Filter by nested affected_versions_data.status (vulnerable, safe, etc.)
         """
@@ -544,16 +562,16 @@ class VulnerabilitySearchTool:
 
     def _parse_aggregations(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """Extract aggregation results from Typesense response.
-        
+
         How aggregations work:
         - Typesense returns facet_counts: category counts (npm: 10, pip: 8) and stats (min/max/avg)
-        - We parse these into a clean dict for the agent: {"ecosystem": {"counts": [...]}, 
+        - We parse these into a clean dict for the agent: {"ecosystem": {"counts": [...]},
           "cvss_score": {"stats": {min: 4.1, max: 9.8, avg: 7.2}}}
-        
+
         Why needed:
         - Answers to "What's the average CVSS?" or "How many npm vulnerabilities?" come from stats/counts
         - Agent uses aggregations to summarize large result sets without listing every document
-        - Enables questions like "Which ecosystem has the most Critical vulnerabilities?" 
+        - Enables questions like "Which ecosystem has the most Critical vulnerabilities?"
           (combine counts + filters to show breakdown by category)
         - Reduces response size: return 10 documents + aggregations instead of all 47
         """
@@ -574,11 +592,9 @@ class VulnerabilitySearchTool:
 
         return aggregations
 
-    def _normalize_text_match_scores(
-        self, documents: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def _normalize_text_match_scores(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Normalize BM25 text_match scores using Z-score normalization.
-        
+
         Why Z-score (standardization)?
         - BM25 scores are unbounded and highly skewed (some very large, some zero)
         - Z-score: (score - mean) / std_dev, centers around 0 with std_dev of 1
@@ -587,36 +603,37 @@ class VulnerabilitySearchTool:
         - Formula: z_score = (x - mean) / std_dev
         - Then: normalized = (z_score + 3) / 6 to map to approximately [0, 1]
           (since ~99.7% of z-scores fall in [-3, 3] by 68-95-99.7 rule)
-        
+
         Special case: Single result
         - If only 1 document, assign it 1.0 (perfect match for that query)
         - If all scores identical, assign 0.5 (neutral/middle score)
-        
+
         Args:
             documents: List of documents with optional _text_match field
-            
+
         Returns:
             Same documents with _text_match scores normalized using Z-score
         """
         import statistics
-        import math
-        
+
         # Collect all text_match scores
         scores = [
             doc["_text_match"]
             for doc in documents
             if "_text_match" in doc and isinstance(doc["_text_match"], (int, float))
         ]
-        
+
         if not scores:
             # No scores to normalize (filter-only query, no text match)
             # Assign default score of 1.0 to all documents (equal relevance)
-            logger.debug("No text_match scores found; assigning default score of 1.0 to all documents")
+            logger.debug(
+                "No text_match scores found; assigning default score of 1.0 to all documents"
+            )
             for doc in documents:
                 if "_text_match" not in doc:
                     doc["_text_match"] = 1.0
             return documents
-        
+
         if len(scores) == 1:
             # Single result: assign perfect score
             logger.debug("Single result found; normalizing text_match to 1.0")
@@ -624,7 +641,7 @@ class VulnerabilitySearchTool:
                 if "_text_match" in doc:
                     doc["_text_match"] = 1.0
             return documents
-        
+
         # Calculate mean and standard deviation for 2+ scores
         mean_score = statistics.mean(scores)
         try:
@@ -636,7 +653,7 @@ class VulnerabilitySearchTool:
                 if "_text_match" in doc:
                     doc["_text_match"] = 0.5
             return documents
-        
+
         if std_dev == 0:
             # Shouldn't happen if we got here, but be safe
             logger.debug("Zero standard deviation; normalizing to 0.5")
@@ -644,7 +661,7 @@ class VulnerabilitySearchTool:
                 if "_text_match" in doc:
                     doc["_text_match"] = 0.5
             return documents
-        
+
         # Apply Z-score normalization, then map to [0, 1] range
         # Using shift: (z + 3) / 6 maps approximately [-3, 3] to [0, 1]
         for doc in documents:
@@ -658,6 +675,5 @@ class VulnerabilitySearchTool:
                     f"Z-normalized text_match for {doc.get('cve_id')}: "
                     f"{original} -> z={z_score:.4f} -> norm={normalized:.4f}"
                 )
-        
-        return documents
 
+        return documents

@@ -43,15 +43,15 @@ logger = get_logger(__name__)
 
 def load_csv_data(data_dir: Path) -> pl.DataFrame:
     """Load and denormalize CSV data using SQL-like joins.
-    
+
     Uses Polars for faster CSV loading and joins compared to pandas.
     Joins 4 normalized tables into single flat structure:
       vulnerabilities → packages (package details)
                      → vulnerability_types (XSS, SQL Injection, etc.)
                      → severity_levels (Critical, High, etc.)
-        This strategy is recommend for search engines to avoid complex joins at query time. 
+        This strategy is recommend for search engines to avoid complex joins at query time.
         Search engines prefer unnormalized flat documents for efficiency.
-    
+
     Returns 47 rows (one per CVE) with all normalized fields flattened.
     """
     logger.info("Loading CSV files...")
@@ -108,7 +108,7 @@ def parse_advisories(data_dir: Path) -> list[dict]:
       4. For sections with code blocks (```): keep entire section intact (never split mid-code)
       5. For text-only sections: split at sentence boundaries (~500 chars per chunk)
       6. Tag each chunk with section type (summary, remediation, testing, best_practices, details)
-    
+
     Returns list of ~60-80 chunk dicts {cve_id, content, section, is_code, affected_versions, ...}
     Each chunk will be embedded separately for semantic search.
     Sections with code blocks are marked with is_code=true for filtering.
@@ -133,7 +133,7 @@ def parse_advisories(data_dir: Path) -> list[dict]:
         affected_versions = _parse_affected_versions_table(content)
         if affected_versions:
             logger.debug(f"  Parsed {len(affected_versions)} affected version entries for {cve_id}")
-        
+
         # Split by section headers (##) to preserve semantic boundaries
         sections = re.split(r"^## ", content, flags=re.MULTILINE)
 
@@ -190,20 +190,20 @@ def parse_advisories(data_dir: Path) -> list[dict]:
 
 def _extract_metadata(content: str) -> dict:
     """Extract metadata from advisory header for structured filtering and analytics.
-    
+
     Extracts key metadata fields (CVE ID, package name, ecosystem, severity, CVSS score)
     from the advisory markdown header. This is a critical advantage of hybrid search engines
     like Typesense over pure vector databases:
-    
+
     - Vector DBs: Can only search semantic similarity, no structured filtering
     - Search Engines: Enable faceting, aggregations, and range queries on metadata
-    
+
     With extracted metadata, we can:
       - Filter by ecosystem (npm/pip/maven), severity level, CVSS score range
       - Generate analytics: avg CVSS by ecosystem, vulnerability type distribution, etc.
       - Combine keyword + vector search with structured filters for precise retrieval
-    
-    This enables sophisticated queries like "Critical npm vulnerabilities + explain fix" 
+
+    This enables sophisticated queries like "Critical npm vulnerabilities + explain fix"
     which require both semantic understanding AND structured filtering.
     """
     metadata = {}
@@ -227,19 +227,19 @@ def _extract_metadata(content: str) -> dict:
 
 def _parse_affected_versions_table(content: str) -> list[dict]:
     """Parse affected versions table from markdown advisory.
-    
+
     Markdown format (from advisories):
     | Version Range | Status | Fixed Version |
     |--------------|--------|---------------|
     | < 4.5.0 | Vulnerable | 4.5.0 |
     | >= 4.5.0 | Safe | - |
-    
+
     Returns list of version entries with parsed metadata:
     [
         {"version_range": "< 4.5.0", "status": "Vulnerable", "fixed_version": "4.5.0"},
         {"version_range": ">= 4.5.0", "status": "Safe", "fixed_version": None}
     ]
-    
+
     Enables queries like:
     - "Show vulnerabilities affecting versions < 4.5.0"
     - Aggregate: "How many CVEs have vulnerable versions < 2.0?"
@@ -247,17 +247,17 @@ def _parse_affected_versions_table(content: str) -> list[dict]:
     """
     versions = []
     lines = content.split("\n")
-    
+
     # Find the affected versions table (starts with "### Affected Versions")
     table_start = None
     for idx, line in enumerate(lines):
         if "### Affected Versions" in line or "## Affected Versions" in line:
             table_start = idx + 1
             break
-    
+
     if table_start is None:
         return versions
-    
+
     # Skip header separator line (|---|---|---|)
     in_table = False
     for line in lines[table_start:]:
@@ -266,7 +266,7 @@ def _parse_affected_versions_table(content: str) -> list[dict]:
             if "Version" in line or "---" in line:
                 in_table = True
                 continue
-            
+
             if in_table:
                 # Parse table row
                 parts = [p.strip() for p in line.split("|")[1:-1]]  # Remove empty first/last
@@ -274,27 +274,29 @@ def _parse_affected_versions_table(content: str) -> list[dict]:
                     version_range = parts[0]
                     status = parts[1]
                     fixed_version = parts[2]
-                    
+
                     # Normalize "Safe" status and handle "-" for missing fixed version
                     status_normalized = status.lower() if status else "unknown"
                     fixed_version_normalized = None if fixed_version == "-" else fixed_version
-                    
-                    versions.append({
-                        "version_range": version_range,
-                        "status": status_normalized,
-                        "fixed_version": fixed_version_normalized,
-                    })
+
+                    versions.append(
+                        {
+                            "version_range": version_range,
+                            "status": status_normalized,
+                            "fixed_version": fixed_version_normalized,
+                        }
+                    )
         else:
             # End of table when we hit non-table content
             if in_table and line.strip() and not line.startswith("|"):
                 break
-    
+
     return versions
 
 
 def _categorize_section(title: str) -> str:
     """Categorize advisory section by keywords for faceted search and analytics.
-    
+
     Maps markdown section headers to semantic categories based on actual data.
     Current sections in the 8 advisory documents:
       - summary: High-level vulnerability overview
@@ -302,13 +304,13 @@ def _categorize_section(title: str) -> str:
       - testing: Testing procedures and verification steps
       - best_practices: Security best practices and recommendations
       - details: Technical details, references, credits (catch-all)
-    
+
     This enables:
       - Faceted search: Find all "remediation" or "testing" sections across CVEs
       - Analytics: Measure documentation completeness (% with testing, best practices)
       - Cross-dimensional queries: "Which ecosystem has best testing coverage?"
       - Targeted retrieval: "Show me testing steps" retrieves only testing sections
-    
+
     Note: Code blocks are marked with is_code=true within any section, not a separate section type.
     """
     title_lower = title.lower()
@@ -330,7 +332,7 @@ def _split_text(text: str, max_chars: int = 500) -> list[str]:
       - Preserves context (related sentences stay together)
       - Avoids cutting mid-sentence (better for embeddings)
       - Simple and effective for technical docs
-    
+
     Returns list of ~150-200 token chunks (sentence count varies by length).
     """
     # Simple sentence split on period, exclamation, question mark
@@ -366,7 +368,7 @@ def generate_embeddings(texts: list[str], model: SentenceTransformer) -> list[li
 
 def create_typesense_collection(client: typesense.Client) -> None:
     """Create Typesense collection schema with nested advisory chunks and affected versions.
-    
+
     One document per CVE (47 total). Each CVE doc has:
       - Top-level fields: cve_id, package_name, ecosystem, severity, cvss_score, etc.
       - affected_versions_data: nested array of {version_range, status, fixed_version}
@@ -374,7 +376,7 @@ def create_typesense_collection(client: typesense.Client) -> None:
       - CSV embedding: vector for BM25+semantic hybrid search on description
       - has_advisory: boolean flag (8 CVEs have advisories, 39 don't)
       - advisory_chunks: nested array of {content, section, is_code, index, embedding}
-    
+
     Nested chunks enable rich search: find CVEs by advisory section (remediation, testing, best_practices, etc.)
     without creating 95 top-level documents. Analytics report 47 CVEs, not 95.
     """
@@ -408,8 +410,15 @@ def create_typesense_collection(client: typesense.Client) -> None:
                 "type": "object[]",
                 "optional": True,
                 "fields": [
-                    {"name": "version_range", "type": "string"},  # e.g., "< 4.5.0", ">= 2.0.0 < 2.3.1"
-                    {"name": "status", "type": "string", "facet": True},  # vulnerable, safe, unknown
+                    {
+                        "name": "version_range",
+                        "type": "string",
+                    },  # e.g., "< 4.5.0", ">= 2.0.0 < 2.3.1"
+                    {
+                        "name": "status",
+                        "type": "string",
+                        "facet": True,
+                    },  # vulnerable, safe, unknown
                     {"name": "fixed_version", "type": "string", "optional": True},  # e.g., "4.5.0"
                 ],
             },
@@ -456,7 +465,7 @@ def import_documents(
       2. For each CVE: create doc with metadata + nested advisory_chunks + affected_versions_data
       3. Each nested chunk has its own embedding (for semantic search within advisories)
       4. Batch import all 47 CVE docs (with ~60-80 nested chunks total)
-    
+
     Result: Hybrid search spans CVE metadata (BM25) + advisory content (semantic)
     Analytics: 47 documents, not 95+ (clean reporting)
     Affected versions enable filtering ("Show versions < 2.0") and aggregations
@@ -467,7 +476,7 @@ def import_documents(
     chunks_by_cve: dict[str, list[dict]] = {}
     # Group affected versions by CVE ID
     versions_by_cve: dict[str, list[dict]] = {}
-    
+
     for idx, chunk in enumerate(advisory_chunks):
         cve_id = chunk["cve_id"]
         if cve_id not in chunks_by_cve:
@@ -482,7 +491,7 @@ def import_documents(
             "embedding": advisory_embeddings[idx],
         }
         chunks_by_cve[cve_id].append(nested_chunk)
-        
+
         # Store affected versions (only once per CVE)
         if cve_id not in versions_by_cve:
             affected_versions = chunk.get("affected_versions", [])
@@ -490,7 +499,9 @@ def import_documents(
                 versions_by_cve[cve_id] = affected_versions
 
     # Create CVE documents with nested advisory chunks and affected versions
-    logger.info(f"Creating {len(csv_data)} CVE documents with nested chunks and affected versions...")
+    logger.info(
+        f"Creating {len(csv_data)} CVE documents with nested chunks and affected versions..."
+    )
     documents = []
 
     for idx, row in enumerate(csv_data.iter_rows(named=True)):
@@ -517,7 +528,7 @@ def import_documents(
         # Add nested advisory chunks if available
         if cve_id in chunks_by_cve:
             doc["advisory_chunks"] = chunks_by_cve[cve_id]
-        
+
         # Add nested affected versions data if available
         if cve_id in versions_by_cve:
             doc["affected_versions_data"] = versions_by_cve[cve_id]
@@ -525,7 +536,9 @@ def import_documents(
         documents.append(doc)
 
     # Batch import to Typesense
-    logger.info(f"Importing {len(documents)} CVE documents with nested chunks and affected versions...")
+    logger.info(
+        f"Importing {len(documents)} CVE documents with nested chunks and affected versions..."
+    )
     client.collections["vulnerabilities"].documents.import_(documents)
     logger.info(f"Successfully imported {len(documents)} CVE documents")
 
@@ -543,7 +556,7 @@ def import_documents(
 
 def main() -> None:
     """Run full ingestion pipeline: CSV → merge advisories → embed → index.
-    
+
     Steps:
       1. Load embedding model (384-dim all-MiniLM-L6-v2)
       2. Load and denormalize 4 CSVs (47 vulnerabilities)

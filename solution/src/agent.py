@@ -36,11 +36,11 @@ Frameworks like PydanticAI automatically handle:
 - Type-safe response handling (no try/except chains)
 - Rate limiting and quota management (built-in)
 
-In Production, besides using high-level frameworks like PydanticAI, we would also leverage tracing tools like LangSmith 
+In Production, besides using high-level frameworks like PydanticAI, we would also leverage tracing tools like LangSmith
 for monitoring, debugging, and improving agent performance and other MCP servers for long term memory, web search, library search (Context7), etc.
 
-FOCUS OF REVIEW: The real RAG logic is in search_tool.py (hybrid search, filters, 
-aggregations) and prompts.py (routing decisions). This file is verbose scaffolding 
+FOCUS OF REVIEW: The real RAG logic is in search_tool.py (hybrid search, filters,
+aggregations) and prompts.py (routing decisions). This file is verbose scaffolding
 that makes implementation details explicit but isn't where the intelligence happens.
 
 CURRENT TRADE-OFFS (intentional for learning):
@@ -92,8 +92,12 @@ class IterationState:
     iteration: int
     search_history: list  # List of (search_type, query, results_count)
     documents_collected: dict  # CVE ID -> document, for deduplication
-    search_parameters: list = field(default_factory=list)  # Full search parameters for each search (used for dedup + LLM visibility)
-    aggregations_collected: dict = None  # Field name -> aggregation data (optional, defaults to empty dict)
+    search_parameters: list = field(
+        default_factory=list
+    )  # Full search parameters for each search (used for dedup + LLM visibility)
+    aggregations_collected: dict = (
+        None  # Field name -> aggregation data (optional, defaults to empty dict)
+    )
     question_embedding: Optional[List[float]] = None  # Cached embedding of original question
     final_answer: Optional[str] = None
     search_debug_info: Optional[str] = None  # Formatted debug information about searches
@@ -124,54 +128,78 @@ class VulnerabilityAgent:
 
     def search_heuristics(self, user_question: str, state: IterationState) -> None:
         """Apply search heuristics to optimize initial strategy.
-        
+
         This method detects specific query patterns and pre-executes targeted searches
         to enhance the agent's capabilities. These are optional optimizations that help
         the agent find relevant results faster and with better precision.
-        
+
         IMPORTANT: These heuristics are NOT mandatory rules imposed on the agent. They are
         suggestions and optimizations. The agent remains the decision-maker and can override
         these strategies if they don't yield results or don't match the query intent.
-        
+
         Current heuristics:
         - Section-specific queries: Detects keywords (testing, remediation, best practices, details)
           and pre-executes targeted search filtered to that advisory section
         - General advisory queries: "documented/advisory/detailed" → filter to CVEs with advisory chunks
-        
+
         Filter Syntax:
         - Typesense nested array filtering uses: field.{filter_conditions}
         - Example: "advisory_chunks.{section:=remediation}" filters nested chunks
-        
+
         Args:
             user_question: The user's original query
             state: Iteration state to update with pre-collected results
         """
         q_lower = user_question.lower()
-        
+
         # Check for section-specific keywords (primary heuristics)
-        has_remediation = any(w in q_lower for w in [
-            "remediation", "remediate", "solution", "mitigation", "patch", "how to fix", "how do i fix"
-        ])
-        has_testing = any(w in q_lower for w in [
-            "testing", "test", "verify", "verification", "how to test", "test case"
-        ])
-        has_best_practices = any(w in q_lower for w in [
-            "best practice", "best practices", "recommendation", "secure coding", "security best"
-        ])
-        has_details = any(w in q_lower for w in [
-            "detail", "details", "information", "overview", "vulnerability details"
-        ])
-        
+        has_remediation = any(
+            w in q_lower
+            for w in [
+                "remediation",
+                "remediate",
+                "solution",
+                "mitigation",
+                "patch",
+                "how to fix",
+                "how do i fix",
+            ]
+        )
+        has_testing = any(
+            w in q_lower
+            for w in ["testing", "test", "verify", "verification", "how to test", "test case"]
+        )
+        has_best_practices = any(
+            w in q_lower
+            for w in [
+                "best practice",
+                "best practices",
+                "recommendation",
+                "secure coding",
+                "security best",
+            ]
+        )
+        has_details = any(
+            w in q_lower
+            for w in ["detail", "details", "information", "overview", "vulnerability details"]
+        )
+
         # Check for general documentation/advisory requests (secondary heuristic)
-        has_documented = any(w in q_lower for w in [
-            "well-documented", "well documented", "documented", 
-            "advisory", "comprehensive"
-        ])
-        
+        has_documented = any(
+            w in q_lower
+            for w in [
+                "well-documented",
+                "well documented",
+                "documented",
+                "advisory",
+                "comprehensive",
+            ]
+        )
+
         # Determine which section to search for
         section_filter = None
         section_name = None
-        
+
         if has_remediation:
             section_filter = "advisory_chunks.{section:=remediation}"
             section_name = "remediation"
@@ -190,44 +218,48 @@ class VulnerabilityAgent:
         else:
             # No heuristic applies
             return
-        
+
         # Build and execute heuristic search
         base_filter = "has_advisory:true"
         additional_filters = f"{base_filter} && {section_filter}" if section_filter else base_filter
-        
+
         logger.info(f"📋 HEURISTIC: {section_name.upper()} section pattern detected")
         logger.info(f"   → Pre-executing advisory filter search (section={section_name})")
-        
+
         result = self.search_tool.search_vulnerabilities(
             query="*",
             search_type="keyword",
             additional_filters=additional_filters,
             facet_by="vulnerability_type,severity,ecosystem",
-            per_page=20
+            per_page=20,
         )
-        
-        state.search_history.append((f"keyword (advisory)", "*", result.total_found))
+
+        state.search_history.append(("keyword (advisory)", "*", result.total_found))
         state.aggregations_collected = result.aggregations or {}
-        
+
         if result.documents:
             for doc in result.documents:
                 cve_id = doc.get("cve_id") or doc.get("id")
                 state.documents_collected[cve_id] = doc
-        
+
         if result.total_found > 0:
-            logger.info(f"✅ Heuristic search: {result.total_found} CVEs with {section_name} sections found")
+            logger.info(
+                f"✅ Heuristic search: {result.total_found} CVEs with {section_name} sections found"
+            )
         else:
-            logger.info(f"⚠️  Heuristic search found 0 results for {section_name} - agent will refine")
+            logger.info(
+                f"⚠️  Heuristic search found 0 results for {section_name} - agent will refine"
+            )
 
     def _set_document_scores(self, documents: list) -> None:
         """Set _score field to the fusion rank score from Typesense.
-        
+
         For hybrid search, Typesense's _text_match is the fusion score (already Z-score normalized).
         For keyword/semantic searches, _text_match is the raw BM25 score (normalized by search_tool).
-        
+
         We simply alias _text_match to _score for consistent sorting/filtering/display everywhere.
         Documents without scores get default _score of 1.0.
-        
+
         Args:
             documents: List of document dictionaries (modified in-place)
         """
@@ -238,49 +270,51 @@ class VulnerabilityAgent:
 
     def _sort_documents_by_score(self, documents_dict: dict) -> dict:
         """Sort documents by relevance score (highest first).
-        
+
         Documents already have a normalized combined score (_score field) computed during collection.
         This method simply sorts by that score in descending order.
-        
+
         Args:
             documents_dict: Dictionary of CVE ID -> document
-            
+
         Returns:
             OrderedDict sorted by score descending (highest first)
         """
+
         def get_sort_key(item):
             cve_id, doc = item
             score = doc.get("_score", 1.0)
             # Return negative for descending sort (highest scores first)
             return -score
-        
+
         # Sort by the combined score
         sorted_items = sorted(documents_dict.items(), key=get_sort_key)
-        
+
         # Return as ordered dict
         from collections import OrderedDict
+
         return OrderedDict(sorted_items)
 
     def _filter_documents_by_score(self, sorted_documents: dict) -> dict:
         """Filter documents by MIN_SCORE and MAX_GAP thresholds.
-        
+
         Two-stage filtering using the normalized _score field:
         1. MIN_SCORE: Remove documents with score < min_score
         2. MAX_GAP: If gap between consecutive scores > max_gap, remove that doc and all after
-        
+
         This removes noise: high-scoring docs vs. low-scoring docs are separated cleanly.
-        
+
         Args:
             sorted_documents: OrderedDict of CVE ID -> document (must be pre-sorted by _score)
-            
+
         Returns:
             OrderedDict with filtered documents
         """
         from collections import OrderedDict
-        
+
         if not sorted_documents:
             return OrderedDict()
-        
+
         # Check if all documents have default scores (1.0) - indicates no real scoring data
         has_real_scores = False
         for cve_id, doc in sorted_documents.items():
@@ -288,55 +322,55 @@ class VulnerabilityAgent:
             if score != 1.0:
                 has_real_scores = True
                 break
-        
+
         if not has_real_scores:
             logger.info(
                 f"📊 No relevance scores available (default 1.0 for all {len(sorted_documents)} docs) - "
                 f"skipping score-based filtering"
             )
             return sorted_documents
-        
+
         # Stage 1: Filter by MIN_SCORE
         stage1_filtered = OrderedDict()
         for cve_id, doc in sorted_documents.items():
             score = doc.get("_score", 0.0)
             if score >= self.config.min_score:
                 stage1_filtered[cve_id] = doc
-        
+
         if not stage1_filtered:
             return OrderedDict()
-        
+
         # Stage 2: Filter by MAX_GAP (remove noise - stop where large gap appears)
         stage2_filtered = OrderedDict()
         previous_score = None
-        
+
         for cve_id, doc in stage1_filtered.items():
             score = doc.get("_score", 0.0)
-            
+
             if previous_score is not None:
                 gap = previous_score - score
                 if gap > self.config.max_gap:
                     # Gap too large - this and all following docs are noise, stop here
                     break
-            
+
             stage2_filtered[cve_id] = doc
             previous_score = score
-        
+
         # Log if documents were filtered
         initial_count = len(sorted_documents)
         final_count = len(stage2_filtered)
-        
+
         if final_count < initial_count:
             removed_count = initial_count - final_count
             min_score_removed = len(sorted_documents) - len(stage1_filtered)
             gap_removed = len(stage1_filtered) - len(stage2_filtered)
-            
+
             logger.info(
                 f"📊 Document filtering applied: {initial_count} → {final_count} "
                 f"({removed_count} removed: {min_score_removed} below MIN_SCORE={self.config.min_score}, "
                 f"{gap_removed} filtered by MAX_GAP={self.config.max_gap})"
             )
-        
+
         return stage2_filtered
 
     def answer_question(self, user_question: str) -> AgentResponse:
@@ -358,11 +392,7 @@ class VulnerabilityAgent:
         logger.info(f"Starting ReAct loop for: {user_question}")
         logger.info("=" * 80)
 
-        state = IterationState(
-            iteration=0, 
-            search_history=[], 
-            documents_collected={}
-        )
+        state = IterationState(iteration=0, search_history=[], documents_collected={})
 
         # Pre-compute embedding of question once for reuse across iterations (performance optimization)
         # This avoids re-encoding the same question in each semantic/hybrid search
@@ -385,24 +415,26 @@ class VulnerabilityAgent:
                 prompt_content = user_question
             else:
                 is_final_iteration = state.iteration >= self.config.max_react_iterations
-                
+
                 # Sort documents by score (highest first) before sending to LLM
                 sorted_docs = self._sort_documents_by_score(state.documents_collected)
-                
+
                 # Filter documents by MIN_SCORE and MAX_GAP to remove noise
                 filtered_docs = self._filter_documents_by_score(sorted_docs)
-                logger.info(f"📊 After filtering: {len(filtered_docs)} documents (MIN_SCORE={self.config.min_score}, MAX_GAP={self.config.max_gap})")
-                
+                logger.info(
+                    f"📊 After filtering: {len(filtered_docs)} documents (MIN_SCORE={self.config.min_score}, MAX_GAP={self.config.max_gap})"
+                )
+
                 prompt_content = get_react_iteration_prompt(
-                    user_question, 
-                    state.iteration, 
+                    user_question,
+                    state.iteration,
                     state.search_history,
                     filtered_docs,  # Pass filtered documents
                     state.aggregations_collected,  # Pass actual aggregations
                     search_parameters=state.search_parameters,  # Pass search parameters for clarity
-                    is_final_iteration=is_final_iteration  # Signal final iteration
+                    is_final_iteration=is_final_iteration,  # Signal final iteration
                 )
-            
+
             # Debug: Print iteration prompt if debug mode enabled
             if self.debug:
                 print("\n" + "=" * 80)
@@ -444,80 +476,85 @@ class VulnerabilityAgent:
                 state.final_answer = "Sorry, we could not generate an answer. Please try a different question or refine your query."
 
         result = state.final_answer or "Could not generate answer."
-        
+
         # Before generating debug info, ensure scores are preserved in state.documents_collected
         # (they may have been added during sorting/filtering but not persisted back)
         # sorted_docs = self._sort_documents_by_score(state.documents_collected)
         # state.documents_collected = sorted_docs
-        
+
         # Generate debug information
         state.search_debug_info = self._format_debug_info(state)
-        
+
         # Add to chat history and maintain max size
-        self.chat_history.append(ChatMessage(
-            user_question=user_question,
-            final_answer=result
-        ))
-        
+        self.chat_history.append(ChatMessage(user_question=user_question, final_answer=result))
+
         # Keep only the last max_chat_history messages
         if len(self.chat_history) > self.config.max_chat_history:
-            self.chat_history = self.chat_history[-self.config.max_chat_history:]
-        
+            self.chat_history = self.chat_history[-self.config.max_chat_history :]
+
         logger.info(f"Chat history size: {len(self.chat_history)}/{self.config.max_chat_history}")
         logger.info(f"\n✅ Final answer ({len(result)} chars)\n\n")
-        
+
         # Add data scope statement to final answer
         num_docs = len(state.documents_collected)
-        scope_statement = f"\n\n---\n📊 *Based on {num_docs} CVE document(s) from our 47-record dataset*"
+        scope_statement = (
+            f"\n\n---\n📊 *Based on {num_docs} CVE document(s) from our 47-record dataset*"
+        )
         result = result + scope_statement
-        
+
         return AgentResponse(answer=result, debug_info=state.search_debug_info)
 
     def _format_debug_info(self, state: IterationState) -> str:
         """Format search results and aggregations for display.
-        
+
         Shows:
         - Summary of all searches performed
         - Documents collected (max 5 docs, 50 chars max for content field)
         - All facets and stats (pretty printed)
-        
+
         Args:
             state: IterationState with collected data
-            
+
         Returns:
             Formatted debug information string
         """
         import json
-        
+
         output = []
         output.append("\n" + "=" * 80)
         output.append("DEBUG: Search Results & Aggregations")
         output.append("=" * 80)
-        
+
         # Search history summary
         output.append("\n📋 SEARCH HISTORY:")
         for i, (search_type, query, total_found) in enumerate(state.search_history, 1):
             output.append(f"  {i}. [{search_type}] query='{query}' → {total_found} results")
-        
+
         # Documents collected (max 5 docs, with truncated fields)
-        output.append(f"\n📄 DOCUMENTS COLLECTED ({len(state.documents_collected)} total, showing up to 5):")
+        output.append(
+            f"\n📄 DOCUMENTS COLLECTED ({len(state.documents_collected)} total, showing up to 5):"
+        )
         if state.documents_collected:
             # Get first 5 documents
             docs_to_show = dict(list(state.documents_collected.items())[:5])
-            
+
             for cve_id, doc in docs_to_show.items():
                 # Get the normalized combined score (computed during collection)
                 score = doc.get("_score", 1.0)
                 score_display = f" | score: {score:.4f}"
-                
+
                 output.append(f"\n  {cve_id}{score_display}:")
-                
+
                 # Show all fields except embeddings and score metadata
                 for field, value in doc.items():
                     # Skip embeddings and internal score fields (already shown above)
-                    if field == "question_embedding" or "embedding" in field.lower() or field.startswith("_"):
+                    if (
+                        field == "question_embedding"
+                        or "embedding" in field.lower()
+                        or field.startswith("_")
+                    ):
                         continue
-                    
+
                     # Special handling for 'content' field - show only 50 chars
                     if field == "content" and isinstance(value, str):
                         preview = value[:50] + ("..." if len(value) > 50 else "")
@@ -535,14 +572,14 @@ class VulnerabilityAgent:
                             output.append(f"    {field}: {json.dumps(value)}")
                     else:
                         output.append(f"    {field}: {value}")
-            
+
             if len(state.documents_collected) > 5:
                 output.append(f"\n  ... and {len(state.documents_collected) - 5} more documents")
         else:
             output.append("  (none)")
-        
+
         # Aggregations (show all)
-        output.append(f"\n📊 AGGREGATIONS & STATS:")
+        output.append("\n📊 AGGREGATIONS & STATS:")
         if state.aggregations_collected:
             for field, agg_data in state.aggregations_collected.items():
                 output.append(f"\n  {field}:")
@@ -551,20 +588,20 @@ class VulnerabilityAgent:
                     output.append(f"    {line}")
         else:
             output.append("  (none)")
-        
+
         output.append("\n" + "=" * 80)
         return "\n".join(output)
 
     def _get_search_signature(self, args_dict: dict) -> tuple:
         """Generate signature for search parameters to detect duplicates.
-        
+
         Signature includes core search logic (type, query, filters, constraints)
         but excludes refinement parameters (facet_by, per_page) which can vary
         without constituting a true duplicate search.
-        
+
         Args:
             args_dict: Dictionary of search arguments
-            
+
         Returns:
             Hashable tuple representing core search parameters
         """
@@ -580,11 +617,11 @@ class VulnerabilityAgent:
 
     def _is_duplicate_search(self, search_sig: tuple, state: IterationState) -> bool:
         """Check if search signature matches any previous searches.
-        
+
         Args:
             search_sig: Signature tuple from _get_search_signature()
             state: Iteration state containing previous search parameters
-            
+
         Returns:
             True if this signature was already searched, False if new search
         """
@@ -596,14 +633,14 @@ class VulnerabilityAgent:
 
     def _execute_search_and_collect(self, function_call, state: IterationState) -> None:
         """Execute search and collect documents/aggregations into state.
-        
+
         Args:
             function_call: LLM function call with search arguments
             state: Current iteration state to update with search results
         """
         # Parse search arguments
         args_dict = dict(function_call.args) if function_call.args else {}
-        
+
         # Check for duplicate search before executing
         search_sig = self._get_search_signature(args_dict)
         if self._is_duplicate_search(search_sig, state):
@@ -614,10 +651,10 @@ class VulnerabilityAgent:
                 f"(Already searched in previous iteration)"
             )
             return
-        
+
         # Execute search with cached question embedding for performance
         args_dict["query_embedding"] = state.question_embedding
-        
+
         search_result = self.search_tool.search_vulnerabilities(**args_dict)
 
         # Track search in history
@@ -628,20 +665,22 @@ class VulnerabilityAgent:
                 search_result.total_found,
             )
         )
-        
+
         # Track full search parameters for deduplication and LLM visibility
-        state.search_parameters.append({
-            "search_type": args_dict.get("search_type", "hybrid"),
-            "query": args_dict.get("query", "*"),
-            "filters": args_dict.get("additional_filters", ""),
-            "cve_ids": args_dict.get("cve_ids", []),
-            "ecosystems": args_dict.get("ecosystems", []),
-            "severity_levels": args_dict.get("severity_levels", []),
-            "vulnerability_types": args_dict.get("vulnerability_types", []),
-            "has_fix": args_dict.get("has_fix"),
-            "published_date_after": args_dict.get("published_date_after"),
-            "results_found": search_result.total_found,
-        })
+        state.search_parameters.append(
+            {
+                "search_type": args_dict.get("search_type", "hybrid"),
+                "query": args_dict.get("query", "*"),
+                "filters": args_dict.get("additional_filters", ""),
+                "cve_ids": args_dict.get("cve_ids", []),
+                "ecosystems": args_dict.get("ecosystems", []),
+                "severity_levels": args_dict.get("severity_levels", []),
+                "vulnerability_types": args_dict.get("vulnerability_types", []),
+                "has_fix": args_dict.get("has_fix"),
+                "published_date_after": args_dict.get("published_date_after"),
+                "results_found": search_result.total_found,
+            }
+        )
 
         if search_result.documents:
             self._set_document_scores(search_result.documents)
@@ -678,11 +717,11 @@ class VulnerabilityAgent:
 
     def _process_response(self, response, state: IterationState) -> bool:
         """Process LLM response and check if it contains a final answer.
-        
+
         Args:
             response: LLM response object
             state: Current iteration state to update with final answer if found
-            
+
         Returns:
             True if final answer was found and state updated, False to continue iteration
         """
@@ -696,11 +735,11 @@ class VulnerabilityAgent:
         except Exception as e:
             logger.warning(f"Failed to extract text from response: {e}")
             text_response = None
-        
+
         if not text_response:
             logger.warning("Empty response from LLM - continuing to next iteration")
             return False
-        
+
         # Check if "Final Answer:" appears anywhere in the response (case-insensitive)
         lower_text = text_response.lower()
         if "final answer:" in lower_text:
@@ -737,5 +776,5 @@ class VulnerabilityAgent:
         lower_text = text.lower()
         idx = lower_text.find("final answer:")
         if idx >= 0:
-            return text[idx + len("final answer:"):].strip()
+            return text[idx + len("final answer:") :].strip()
         return text

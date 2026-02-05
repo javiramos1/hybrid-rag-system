@@ -21,22 +21,41 @@ class SimpleFormatter(logging.Formatter):
         """Format log record with optional extra fields."""
         # Base message
         msg = super().format(record)
-        
+
         # Add extra fields if present (all fields except standard ones)
         standard_fields = {
-            'name', 'msg', 'args', 'created', 'filename', 'funcName', 'levelname',
-            'levelno', 'lineno', 'module', 'msecs', 'message', 'pathname', 'process',
-            'processName', 'relativeCreated', 'thread', 'threadName', 'exc_info',
-            'exc_text', 'stack_info', 'taskName', 'getMessage'
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "taskName",
+            "getMessage",
         }
-        
+
         extra_fields = {k: v for k, v in record.__dict__.items() if k not in standard_fields}
-        
+
         if extra_fields:
             # Format extra fields nicely
             extra_str = " | ".join(f"{k}={v}" for k, v in sorted(extra_fields.items()))
             msg = f"{msg} | {extra_str}"
-        
+
         return msg
 
 
@@ -86,9 +105,7 @@ def get_logger(name: str) -> logging.Logger:
             formatter = JSONFormatter()
         else:
             # Simple format: logger_name - LEVEL - message [extra fields]
-            formatter = SimpleFormatter(
-                "%(name)s - %(levelname)s - %(message)s"
-            )
+            formatter = SimpleFormatter("%(name)s - %(levelname)s - %(message)s")
 
         handler.setFormatter(formatter)
         logger.addHandler(handler)
