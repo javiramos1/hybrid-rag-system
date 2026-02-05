@@ -1,8 +1,10 @@
 # Hybrid RAG System for Security Vulnerabilities
 
-A compact, production-minded hybrid RAG system that answers plain-English questions about security vulnerabilities by combining structured CVE metadata and unstructured advisory content. We decided not to use any high-level RAG frameworks to learn how to implement the ReAct pattern, tool calling, and core retrieval/synthesis logic from scratch. The main goal is to test the capabilities of search engines like Typesense or OpenSearch for RAG applications, as opposed to traditional vector databases.
+A compact, production-minded hybrid RAG system that answers plain-English questions about security vulnerabilities by combining structured CVE metadata and unstructured advisory content. This project serves as an exercise to test the capabilities of search engines like Typesense for RAG applications when dealing with semi-structured/structured data and analytics requirements.
 
-We discovered that for structured and especially semi-structured data, search engines are superior because they provide hybrid search including keyword search, which is excellent for finding CVEs and other IDs in semi-structured data as well as text chunks. On top of that, faceting allows aggregation on numeric fields, so a single query provides text fields, chunks, and aggregations simultaneously - this is very powerful.
+I decided not to use any high-level RAG frameworks to learn how to implement the ReAct pattern, tool calling, and core retrieval/synthesis logic from scratch using low-level APIs. **This approach is not recommended for real-world scenarios** - for production-ready implementations using high-level agent frameworks, see my [recipe-agent](https://github.com/javiramos1/recipe-agent) repository.
+
+I discovered that for structured and especially semi-structured data, search engines are superior because they provide hybrid search including keyword search, which is excellent for finding CVEs and other IDs in semi-structured data as well as text chunks. On top of that, faceting allows aggregation on numeric fields, so a single query provides text fields, chunks, and aggregations simultaneously - this is very powerful.
 
 ## Quick start (use the Makefile)
 
@@ -57,13 +59,13 @@ This table shows the most useful targets you'll use when working with the system
 
 This project is tailored for a specific use case and data profile:
 
-**Use case**: Vulnerability search and basic analytics over semi-structured data (CVE metadata + advisory text). The system assumes a search engine is already operational; we're reusing it rather than building from scratch.
+**Use case**: Vulnerability search and basic analytics over semi-structured data (CVE metadata + advisory text). The system assumes a search engine is already operational; I'm reusing it rather than building from scratch.
 
 **Data shape**: Semi-structured (not fully relational, not purely unstructured). Structured metadata (CVE ID, CVSS, versions) paired with advisory documents that benefit from semantic search.
 
-**Scale & simplicity**: We prioritize avoiding data duplication across different formats and maintaining consistency. Simplicity matters as much as scale—if the system becomes harder to reason about, it's harder to maintain.
+**Scale & simplicity**: I prioritize avoiding data duplication across different formats and maintaining consistency. Simplicity matters as much as scale—if the system becomes harder to reason about, it's harder to maintain.
 
-**Learning goals**: We implemented everything from scratch without frameworks to deeply understand ReAct patterns, tool calling, and hybrid search mechanics. This hands-on approach revealed the superiority of search engines over pure vector databases for structured/semi-structured data.
+**Learning goals**: This is a deliberate learning exercise where I implemented everything from scratch using low-level APIs to deeply understand ReAct patterns, tool calling, and hybrid search mechanics. **This approach is not recommended for production** - see my [recipe-agent](https://github.com/javiramos1/recipe-agent) for a high-level agent implementation. My hands-on approach revealed the superiority of search engines over pure vector databases for structured/semi-structured data.
 
 **When this approach may not fit:**
 
@@ -119,7 +121,7 @@ For the given dataset (47 CVEs with semi-structured advisories), this hybrid ret
 
 ### Why all-MiniLM-L6-v2 for embeddings?
 
-We chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
+I chose this model because it hits the sweet spot for prototype-to-production RAG systems with small datasets:
 
 **Practical reasons:**
 
@@ -134,7 +136,7 @@ With 47 CVEs and 8 advisories, embedding quality matters less than chunking stra
 
 ### Why Typesense? (Design Decision)
 
-We evaluated four major search approaches and chose Typesense because it demonstrates the superiority of search engines over pure vector databases for structured and semi-structured data:
+I evaluated four major search approaches and chose Typesense because it demonstrates the superiority of search engines over pure vector databases for structured and semi-structured data:
 
 | Approach | Structured | Semantic | Hybrid | Complexity |
 | --- | --- | --- | --- | --- |
@@ -198,7 +200,7 @@ CVE Document (47 total):
   - No distributed indexing: both FAISS and SQLite struggle at scale (terabytes of vectors, millions of CVEs)
 - **PostgreSQL only**: Can't do semantic search. Simple text search.
 
-**Real-world context:** We researched public services like [Snyk Security](https://security.snyk.io/) and observed they rely on search engines. This influenced our assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
+**Real-world context:** I researched public services like [Snyk Security](https://security.snyk.io/) and observed they rely on search engines. This influenced my assumption that a maintained search engine is a reasonable operational dependency for vulnerability search. You can reuse a centralized index rather than running separate SQL and vector stores. In practice, search engines handle semi-structured advisory documents better than raw vector DBs because they combine token-level heuristics (keyword) with embeddings for conceptual matches.
 
 **Additional trade-offs:**
 
@@ -307,7 +309,7 @@ Where:
 
 **Z-Score Normalization for BM25:**
 
-BM25 scores from Typesense are unbounded integers. We normalize them using Z-score (standardization):
+BM25 scores from Typesense are unbounded integers. I normalize them using Z-score (standardization):
 
 $$\text{z-score} = \frac{\text{score} - \mu}{\sigma}$$
 
@@ -403,7 +405,7 @@ The agent implements **ReAct (Reasoning + Acting)** with automatic stopping:
 
 ### Single unified search function
 
-Instead of separate search paths for CSV vs. advisory queries, we expose one `search_vulnerabilities()` with flexible parameters:
+Instead of separate search paths for CSV vs. advisory queries, I expose one `search_vulnerabilities()` with flexible parameters:
 
 ```python
 search_vulnerabilities(
@@ -451,7 +453,7 @@ The 8 advisory markdown files are parsed with **section-aware chunking**—a pra
 
 **Why this approach?**
 
-Security advisories have strong structure (headers define topics). We leverage that instead of using more complex semantic chunking that would:
+Security advisories have strong structure (headers define topics). I leverage that instead of using more complex semantic chunking that would:
 
 - Require embedding every sentence just to find split points (slow, expensive)
 - Ignore the structure humans already built into the markdown
